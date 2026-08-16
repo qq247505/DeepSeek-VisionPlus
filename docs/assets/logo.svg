@@ -1,20 +1,36 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#4d6bfe"/>
+      <stop offset="0" stop-color="#5b7cfa"/>
       <stop offset="1" stop-color="#2f44c7"/>
     </linearGradient>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#dbe4ff"/>
+    </linearGradient>
+    <radialGradient id="eyeGlow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#67e8f9" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#67e8f9" stop-opacity="0"/>
+    </radialGradient>
   </defs>
-  <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#bg)"/>
-  <!-- 鲸鱼身体 -->
-  <path d="M70 132 C70 98 98 76 134 74 C178 72 208 96 212 130 C214 156 194 174 162 176 C114 179 72 162 70 132 Z" fill="#ffffff"/>
-  <!-- 尾巴 -->
-  <path d="M64 126 L34 106 C26 100 18 98 10 103 C21 113 28 121 30 128 C28 135 21 143 10 153 C18 158 26 156 34 150 L64 132 Z" fill="#ffffff"/>
-  <!-- 喷水 -->
-  <path d="M172 68 C166 52 158 42 148 36" stroke="#a5f3fc" stroke-width="6" stroke-linecap="round" fill="none"/>
-  <path d="M186 72 C182 56 176 44 168 38" stroke="#a5f3fc" stroke-width="6" stroke-linecap="round" fill="none"/>
-  <!-- 眼睛（视觉主题：青色发光） -->
-  <circle cx="160" cy="116" r="19" fill="none" stroke="#22d3ee" stroke-width="5"/>
-  <circle cx="160" cy="116" r="9" fill="#22d3ee"/>
-  <circle cx="157" cy="113" r="3" fill="#ffffff"/>
+  <rect x="8" y="8" width="240" height="240" rx="60" fill="url(#bg)"/>
+  <rect x="14" y="14" width="228" height="228" rx="54" fill="none" stroke="#ffffff" stroke-opacity="0.16" stroke-width="2"/>
+  <!-- 鲸鱼 -->
+  <g>
+    <!-- 尾巴 -->
+    <path d="M74 126 C66 116 56 108 44 102 C30 95 16 94 8 99 C18 110 25 120 27 129 C25 138 18 148 8 159 C16 164 30 163 44 156 C56 150 66 142 74 132 Z" fill="url(#body)"/>
+    <!-- 身体 -->
+    <path d="M76 141 C76 106 100 80 136 77 C182 73 212 96 217 130 C220 158 200 179 166 181 C118 184 78 166 76 141 Z" fill="url(#body)"/>
+    <!-- 腹部阴影 -->
+    <path d="M86 156 C102 174 138 180 166 178 C188 177 205 167 213 152 C205 170 188 179 166 181 C118 184 78 166 76 141 C78 156 82 163 86 156 Z" fill="#8fa8ff" opacity="0.45"/>
+    <!-- 喷水 -->
+    <path d="M178 68 C172 50 162 39 149 33" stroke="#a5f3fc" stroke-width="7" stroke-linecap="round" fill="none"/>
+    <path d="M195 73 C192 55 184 42 174 35" stroke="#a5f3fc" stroke-width="7" stroke-linecap="round" fill="none"/>
+    <circle cx="143" cy="29" r="4.5" fill="#a5f3fc"/>
+    <!-- 眼睛（视觉镜头） -->
+    <circle cx="168" cy="116" r="30" fill="url(#eyeGlow)"/>
+    <circle cx="168" cy="116" r="21" fill="none" stroke="#22d3ee" stroke-width="5"/>
+    <circle cx="168" cy="116" r="10" fill="#22d3ee"/>
+    <circle cx="164.5" cy="112.5" r="3.5" fill="#ffffff"/>
+  </g>
 </svg>
