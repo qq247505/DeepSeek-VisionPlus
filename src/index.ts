@@ -336,6 +336,16 @@ export function apply(ctx: Context, config: unknown): void {
   ctx.llm.registerAdapter([cfg.providerId], adapter)
 
   // 4) 状态行投递：把视觉调用的结果行/进行中行注入对话。
+  // 视觉变体会话的自主看图指引：选中包装变体时注入系统提示，切走即注销（会话级）。
+  const variantIds = new Set(cfg.variants.map(v => v.id))
+  const guidanceRegistered = new WeakSet<object>()
+  const guidanceDisposers = new WeakMap<object, (() => void) | undefined>()
+  const GUIDANCE_TEXT = [
+    '## Image inspection (vision-plus)',
+    'You can inspect images with the read_image tool. When screenshots, UI renders, or layout checks are relevant (e.g. game client / UI development), call read_image on your own — never ask the user to describe an image.',
+    'Read at most 1-2 images per call. If read_image fails, retry it separately; if it keeps failing, continue the rest of this turn without image inspection and briefly note the failure.',
+  ].join('\n')
+
   ctx.on('agent/request', async (payload, next) => {
     const base = await next()
     const agent = payload.agent
@@ -372,6 +382,22 @@ export function apply(ctx: Context, config: unknown): void {
       }
     } catch {
       // 忽略
+    }
+    try {
+      const modelId = typeof base.model === 'string' ? base.model : ''
+      const isVariant = variantIds.has(modelId)
+      const scopedPrompt = (agent as { ctx?: { get?: (name: string) => unknown } }).ctx?.get?.('systemPrompt') as { section?: (options: { name: string, order: number, text: string }) => () => void } | undefined
+      if (isVariant && !guidanceRegistered.has(agent as object)) {
+        const dispose = scopedPrompt?.section?.({ name: 'vision-plus:vision-guidance', order: 155, text: GUIDANCE_TEXT })
+        guidanceRegistered.add(agent as object)
+        guidanceDisposers.set(agent as object, dispose)
+      } else if (!isVariant && guidanceRegistered.has(agent as object)) {
+        guidanceDisposers.get(agent as object)?.()
+        guidanceDisposers.delete(agent as object)
+        guidanceRegistered.delete(agent as object)
+      }
+    } catch {
+      // 指引注入失败不影响主流程
     }
     return base
   })

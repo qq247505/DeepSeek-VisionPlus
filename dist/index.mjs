@@ -30874,6 +30874,14 @@ function apply(ctx, config) {
 		});
 	});
 	ctx.llm.registerAdapter([cfg.providerId], adapter);
+	const variantIds = new Set(cfg.variants.map((v) => v.id));
+	const guidanceRegistered = /* @__PURE__ */ new WeakSet();
+	const guidanceDisposers = /* @__PURE__ */ new WeakMap();
+	const GUIDANCE_TEXT = [
+		"## Image inspection (vision-plus)",
+		"You can inspect images with the read_image tool. When screenshots, UI renders, or layout checks are relevant (e.g. game client / UI development), call read_image on your own — never ask the user to describe an image.",
+		"Read at most 1-2 images per call. If read_image fails, retry it separately; if it keeps failing, continue the rest of this turn without image inspection and briefly note the failure."
+	].join("\n");
 	ctx.on("agent/request", async (payload, next) => {
 		const base = await next();
 		const agent = payload.agent;
@@ -30910,6 +30918,24 @@ function apply(ctx, config) {
 					});
 					push(`vision-plus：🔍 正在调用 ${first.label} 处理图片…`, `vision-plus：🔍 正在调用 ${first.label} 处理图片…`);
 				}
+			}
+		} catch {}
+		try {
+			const modelId = typeof base.model === "string" ? base.model : "";
+			const isVariant = variantIds.has(modelId);
+			const scopedPrompt = agent.ctx?.get?.("systemPrompt");
+			if (isVariant && !guidanceRegistered.has(agent)) {
+				const dispose = scopedPrompt?.section?.({
+					name: "vision-plus:vision-guidance",
+					order: 155,
+					text: GUIDANCE_TEXT
+				});
+				guidanceRegistered.add(agent);
+				guidanceDisposers.set(agent, dispose);
+			} else if (!isVariant && guidanceRegistered.has(agent)) {
+				guidanceDisposers.get(agent)?.();
+				guidanceDisposers.delete(agent);
+				guidanceRegistered.delete(agent);
 			}
 		} catch {}
 		return base;
