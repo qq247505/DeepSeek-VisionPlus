@@ -2,8 +2,8 @@
   <img src="docs/assets/logo.svg" width="160" alt="DeepSeek VisionPlus" />
 </p>
 
-<h1 align="center">Make DeepSeek See the World 👀</h1>
-<p align="center"><b>DeepSeek Harness 的视觉层 —— 文本交给 DeepSeek 官方模型，图片交给免费视觉模型。</b></p>
+<h1 align="center">DeepSeek VisionPlus</h1>
+<p align="center"><b>DeepSeek Harness 视觉插件 —— 文本走 DeepSeek 官方 API，图片自动路由到免费视觉模型池。</b></p>
 
 <p align="center">
   <a href="https://github.com/qq247505/DeepSeek-VisionPlus/blob/main/LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
@@ -13,9 +13,7 @@
 
 ## 👋 为什么
 
-DeepSeek 官方模型是纯文本模型，本身不能看图。当你在 DeepSeek Harness 里做 UI 复刻、截图分析、游戏界面调整时，总得"人肉"把图片内容转述给它。
-
-DeepSeek VisionPlus 给 DeepSeek 装上一双眼睛：**文本与编码仍由 DeepSeek 官方 API 处理，图片自动交给免费视觉模型池（智谱 GLM / SiliconFlow Qwen）理解**，结果无缝回到对话里——模型自己会在需要看图时主动调用，全程不需要你参与。
+DeepSeek 官方模型是纯文本模型，本身不能看图。DeepSeek VisionPlus 给它接上免费视觉模型：消息中出现图片时自动路由到视觉池理解，结果无缝回到对话；无图请求仍由 DeepSeek 官方模型处理。模型会在需要看图时主动调用，全程无需人工转述。
 
 ## ✨ 特性
 
