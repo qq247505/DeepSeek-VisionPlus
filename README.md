@@ -36,7 +36,7 @@ DeepSeek 官方模型是纯文本模型，本身不能看图。DeepSeek VisionPl
 dsh plugin --profile web add github:qq247505/DeepSeek-VisionPlus
 ```
 
-安装脚本会按行业惯例自动定位 Harness 源码目录（见下文），应用增强补丁并重建宿主；找不到仓库或关键补丁无法应用时，安装会**直接失败并输出原因**（插件只有完整形态，不做降级）。
+安装脚本会按行业惯例自动定位 Harness 安装位置（见下文），应用增强补丁并重建宿主；找不到仓库或关键补丁无法应用时，安装会**直接失败并输出原因**（插件只有完整形态，不做降级）。
 
 ### Harness 位置是如何找到的
 
@@ -46,7 +46,7 @@ dsh plugin --profile web add github:qq247505/DeepSeek-VisionPlus
 2. 从安装目录向上逐级查找（`package.json` 名称 + `packages/host/apiproxy` 源码标记校验）；
 3. 常见克隆路径 `D:\DeepSeek Harness` / `C:\DeepSeek Harness`（Windows 兜底）。
 
-> **限制**：通过 `npx @deepseek-ai/dsh web` 运行的纯 npm 用户没有源码目录，增强补丁无处应用，安装会失败并提示原因。需等待官方开放"插件注册 RPC / 槽位"的正式机制后，本插件才能覆盖纯 npm 安装方式。
+> **限制**：通过 `npx @deepseek-ai/dsh web` 运行的纯 npm 用户没有本地源码，增强补丁无处应用，安装会失败并提示原因。需等待官方开放"插件注册 RPC / 槽位"的正式机制后，本插件才能覆盖纯 npm 安装方式。
 
 ## 🚀 快速开始
 

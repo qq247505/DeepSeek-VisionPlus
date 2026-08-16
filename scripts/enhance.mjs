@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * dsh-visionplus 安装增强器（postinstall）：
- * 定位 DeepSeek Harness 源码目录 → 应用 patches/ 增强补丁 → 重建宿主。
+ * 定位 Harness 安装位置 → 应用 patches/ 增强补丁 → 重建宿主。
  * 找不到目录时，若在交互终端则提示用户手动输入路径后继续；其他失败（补丁冲突/构建失败）直接输出原因并中止。
  */
 import { spawnSync } from 'node:child_process'
@@ -43,7 +43,7 @@ async function promptPath() {
   if (!(process.stdin.isTTY && process.stdout.isTTY)) return null
   const rl = createInterface({ input: process.stdin, output: process.stdout })
   const ask = () => new Promise(resolveAnswer => rl.question(
-    `  ${warn('未找到 Harness 源码目录。请输入 DeepSeek Harness 源码根目录路径（例如 D:\\DeepSeek Harness）后回车：')} `,
+    `  ${warn('未找到 Harness 安装路径。请输入 DeepSeek Harness 源码根目录路径（例如 D:\\DeepSeek Harness）后回车：')} `,
     resolveAnswer,
   ))
   for (let i = 0; i < 3; i += 1) {
@@ -51,7 +51,7 @@ async function promptPath() {
     if (answer === '') continue
     const abs = resolve(answer)
     if (isHarnessRoot(abs)) { rl.close(); return abs }
-    console.log(red(`  ✗ "${answer}" 不是有效的 Harness 源码目录（需含 package.json、.git 与 packages/host/apiproxy 源码）。`))
+    console.log(red(`  ✗ "${answer}" 不是有效的 Harness 安装路径（需含 package.json 与 .git）。`))
   }
   rl.close()
   return null
@@ -59,14 +59,14 @@ async function promptPath() {
 
 const root = (await autoFind()) ?? (await promptPath())
 if (root === null) {
-  console.error(red('[dsh-visionplus] 安装失败：未找到 DeepSeek Harness 源码目录，无法应用增强补丁。'))
+  console.error(red('[dsh-visionplus] 安装失败：未找到 Harness 安装路径，无法应用增强补丁。'))
   console.error('  解决方式二选一：')
-  console.error('    1) 设置环境变量后重新安装：  $env:DSH_HARNESS_ROOT="你的 Harness 仓库路径"')
+  console.error('    1) 设置环境变量后重新安装：  $env:DSH_HARNESS_ROOT="你的 Harness 安装路径"')
   console.error('    2) 先把插件内 patches\\增强补丁.bat 复制到 Harness 仓库根目录双击执行，再重新安装插件。')
   process.exit(1)
 }
 
-console.log(green(`[dsh-visionplus] ✔ 已找到 Harness 源码目录：${root}`))
+console.log(green(`[dsh-visionplus] ✔ 已找到 Harness 安装路径：${root}`))
 const patches = readdirSync(patchesDir).filter(name => name.endsWith('.patch')).sort()
 const REQUIRED = 'models-extra-slot.patch'
 let applied = 0

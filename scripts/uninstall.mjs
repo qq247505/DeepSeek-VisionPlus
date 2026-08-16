@@ -39,7 +39,7 @@ async function promptPath() {
   if (!(process.stdin.isTTY && process.stdout.isTTY)) return null
   const rl = createInterface({ input: process.stdin, output: process.stdout })
   const ask = () => new Promise(r => rl.question(
-    `  ${warn('未找到 Harness 源码目录。请输入 DeepSeek Harness 源码根目录路径后回车：')} `,
+    `  ${warn('未找到 Harness 安装路径。请输入 DeepSeek Harness 源码根目录路径后回车：')} `,
     r,
   ))
   for (let i = 0; i < 3; i += 1) {
@@ -47,7 +47,7 @@ async function promptPath() {
     if (answer === '') continue
     const abs = resolve(answer)
     if (isHarnessRoot(abs)) { rl.close(); return abs }
-    console.log(red(`  ✗ "${answer}" 不是有效的 Harness 源码目录。`))
+    console.log(red(`  ✗ "${answer}" 不是有效的 Harness 安装路径。`))
   }
   rl.close()
   return null
@@ -77,13 +77,13 @@ function cleanSettings() {
 
 const root = (await autoFind()) ?? (await promptPath())
 if (root === null) {
-  console.error(red('[dsh-visionplus] 卸载不完整：未找到 Harness 源码目录，无法回退增强补丁。'))
-  console.error('  设置环境变量 $env:DSH_HARNESS_ROOT="你的 Harness 仓库路径" 后重试卸载。')
+  console.error(red('[dsh-visionplus] 卸载不完整：未找到 Harness 安装路径，无法回退增强补丁。'))
+  console.error('  设置环境变量 $env:DSH_HARNESS_ROOT="你的 Harness 安装路径" 后重试卸载。')
   cleanSettings()
   process.exit(0)
 }
 
-console.log(green(`[dsh-visionplus] ✔ 已找到 Harness 源码目录：${root}`))
+console.log(green(`[dsh-visionplus] ✔ 已找到 Harness 安装路径：${root}`))
 const patches = readdirSync(patchesDir).filter(name => name.endsWith('.patch')).sort().reverse()
 let reverted = 0
 for (const patch of patches) {
