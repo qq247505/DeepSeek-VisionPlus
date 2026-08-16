@@ -11,6 +11,12 @@ import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { createInterface } from 'node:readline'
 
+// Windows 控制台默认 GBK（cp936），直接输出 UTF-8 中文会乱码。
+// 先把活动代码页切到 UTF-8（chcp 65001）；非交互/重定向场景会静默失败，无副作用。
+if (process.platform === 'win32') {
+  try { spawnSync('chcp', ['65001'], { shell: true, stdio: 'ignore' }) } catch { /* 忽略 */ }
+}
+
 const here = dirname(fileURLToPath(import.meta.url))
 const patchesDir = join(here, '..', 'patches')
 const green = (s) => `\u001b[32m${s}\u001b[0m`
