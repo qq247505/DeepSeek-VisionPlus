@@ -113,4 +113,13 @@ if (reverted > 0) {
   console.log('[dsh-visionplus] 无需回退补丁。')
 }
 cleanSettings()
-console.log(green('[dsh-visionplus] ✔ 卸载完成。'))
+const summary = [
+  '',
+  '  ┌──────────────────────────────────────────────┐',
+  '  │        🗑️  DeepSeek VisionPlus 卸载完成       │',
+  '  └──────────────────────────────────────────────┘',
+  '',
+  '  已回退全部增强补丁，宿主已恢复官方原状。',
+  '',
+]
+console.log(green(summary.join('\n')))

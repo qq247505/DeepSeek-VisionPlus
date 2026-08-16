@@ -114,4 +114,18 @@ if (applied > 0) {
 } else {
   console.log('[dsh-visionplus] 增强补丁已就绪，无需重建。')
 }
-console.log(green('[dsh-visionplus] ✔ 安装完成！重启 Harness 后，插件卡片显示在"模型"页内。'))
+const summary = [
+  '',
+  '  ┌──────────────────────────────────────────────┐',
+  '  │        ✅ DeepSeek VisionPlus 安装完成        │',
+  '  └──────────────────────────────────────────────┘',
+  '',
+  '  插件条目   dsh-visionplus（设置 → 插件 可搜索到）',
+  '  设置卡片   设置 → 模型 → DeepSeek VisionPlus',
+  '  模型变体   DeepSeek-V4-Pro 视觉 / DeepSeek-V4-Flash 视觉',
+  '',
+  '  下一步：重启 Harness，然后在"模型"页卡片里',
+  '  填入 DeepSeek 密钥、添加视觉模型并保存即可使用。',
+  '',
+]
+console.log(green(summary.join('\n')))
