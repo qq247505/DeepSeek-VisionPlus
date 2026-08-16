@@ -399,8 +399,9 @@ export function VisionSettingsPage(props: { api: ApiFace, close: () => void }): 
   const loadFromSettings = async (): Promise<void> => {
     try {
       const response = await fetch('/api/visionPlus.settings')
-      const envelope = await response.json() as { result?: { ok?: boolean, value?: VisionSettingsWire, error?: { message?: string } } }
-      const settings = envelope.result?.ok === false ? undefined : envelope.result?.value
+      const envelope = await response.json() as { result?: { ok?: boolean, value?: { settings?: VisionSettingsWire, keys?: Record<string, string> }, error?: { message?: string } } }
+      const settings = envelope.result?.ok === false ? undefined : envelope.result?.value?.settings
+      const wireKeys = envelope.result?.value?.keys ?? {}
       if (settings === undefined) {
         setMessage('载入失败：' + (envelope.result?.error?.message ?? '设置接口不可用'))
         setLoaded(true)
@@ -421,6 +422,14 @@ export function VisionSettingsPage(props: { api: ApiFace, close: () => void }): 
         models: (vm.models ?? []).map(m => ({ id: m.id, name: m.name ?? m.id, contextWindow: m.contextWindow, maxTokens: m.maxTokens })),
       }))
       setModels(drafts)
+      // 密钥自动填入（从本地凭据配置读取）
+      setTextKey(wireKeys['DEEPSEEK_API_KEY'] ?? '')
+      const initialModelKeys: Record<string, string> = {}
+      for (const item of drafts) {
+        const key = wireKeys[item.apiKeyEnv]
+        if (key !== undefined) initialModelKeys[item.id] = key
+      }
+      setModelKeys(initialModelKeys)
       const refs = ['DEEPSEEK_API_KEY', ...drafts.map(item => item.apiKeyEnv)].filter(Boolean)
       if (refs.length > 0) {
         const creds = await api.credentials.describe({ refs })
@@ -679,8 +688,16 @@ export function VisionSettingsPage(props: { api: ApiFace, close: () => void }): 
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ settings }),
       })
-      const envelope = await response.json() as { result?: { ok?: boolean, error?: { message?: string } } }
+      const envelope = await response.json() as { result?: { ok?: boolean, value?: { settings?: VisionSettingsWire, keys?: Record<string, string> }, error?: { message?: string } } }
       if (envelope.result?.ok === false) throw new Error(envelope.result.error?.message ?? '保存设置失败')
+      const savedKeys = envelope.result?.value?.keys ?? {}
+      setTextKey(savedKeys['DEEPSEEK_API_KEY'] ?? '')
+      const savedModelKeys: Record<string, string> = {}
+      for (const item of models) {
+        const key = savedKeys[item.apiKeyEnv]
+        if (key !== undefined) savedModelKeys[item.id] = key
+      }
+      setModelKeys(savedModelKeys)
       // 保存后：自定义平台的显示名同步为模型名（仅本地状态，配置已持久化）
       setModels(prev => prev.map(m => {
         const modelName = (m.models[0]?.name ?? '').trim()

@@ -28,7 +28,7 @@ export function apply(ctx: Context): void {
         name: 'settings.section',
         id: 'vision-plus',
         order: 20,
-        label: () => 'DeepSeek VisionPlus',
+        label: () => 'VisionPlus',
         inject: () => ({ api }),
       }, VisionSettingsPage))
     } catch (error) {

@@ -30600,6 +30600,18 @@ function apply(ctx, config) {
 		}
 	};
 	migrateLegacy();
+	/** 解析设置引用的全部密钥（供界面自动填入；未配置的返回空） */
+	const resolveKeys = async (settings) => {
+		const refs = /* @__PURE__ */ new Set();
+		if (settings.text.apiKeyEnv !== void 0 && settings.text.apiKeyEnv !== "") refs.add(settings.text.apiKeyEnv);
+		for (const vm of settings.visionModels) if (vm.apiKeyEnv !== void 0 && vm.apiKeyEnv !== "") refs.add(vm.apiKeyEnv);
+		const out = {};
+		for (const ref of refs) try {
+			const resolved = await ctx.credentials.resolve(ref);
+			if (resolved?.value !== void 0) out[ref] = resolved.value;
+		} catch {}
+		return out;
+	};
 	if (webServer !== void 0) webServer.register({
 		kind: "exact",
 		path: "/api/visionPlus.settings",
@@ -30613,12 +30625,16 @@ function apply(ctx, config) {
 			};
 			try {
 				if ((req.method ?? "GET").toUpperCase() === "GET") {
+					const settings = readSettings();
 					respond({
 						type: "server-response",
 						rpcId: "",
 						result: {
 							ok: true,
-							value: readSettings()
+							value: {
+								settings,
+								keys: await resolveKeys(settings)
+							}
 						}
 					});
 					return;
@@ -30646,7 +30662,10 @@ function apply(ctx, config) {
 					rpcId: "",
 					result: {
 						ok: true,
-						value: readSettings()
+						value: {
+							settings: readSettings(),
+							keys: await resolveKeys(next)
+						}
 					}
 				});
 			} catch (error) {

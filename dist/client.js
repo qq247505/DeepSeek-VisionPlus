@@ -769,7 +769,8 @@ window.__ModuleLoader__.load({
 			const loadFromSettings = async () => {
 				try {
 					const envelope = await (await fetch("/api/visionPlus.settings")).json();
-					const settings = envelope.result?.ok === false ? void 0 : envelope.result?.value;
+					const settings = envelope.result?.ok === false ? void 0 : envelope.result?.value?.settings;
+					const wireKeys = envelope.result?.value?.keys ?? {};
 					if (settings === void 0) {
 						setMessage("载入失败：" + (envelope.result?.error?.message ?? "设置接口不可用"));
 						setLoaded(true);
@@ -800,6 +801,13 @@ window.__ModuleLoader__.load({
 						}))
 					}));
 					setModels(drafts);
+					setTextKey(wireKeys["DEEPSEEK_API_KEY"] ?? "");
+					const initialModelKeys = {};
+					for (const item of drafts) {
+						const key = wireKeys[item.apiKeyEnv];
+						if (key !== void 0) initialModelKeys[item.id] = key;
+					}
+					setModelKeys(initialModelKeys);
 					const refs = ["DEEPSEEK_API_KEY", ...drafts.map((item) => item.apiKeyEnv)].filter(Boolean);
 					if (refs.length > 0) {
 						const creds = await api.credentials.describe({ refs });
@@ -1067,6 +1075,14 @@ window.__ModuleLoader__.load({
 						body: JSON.stringify({ settings })
 					})).json();
 					if (envelope.result?.ok === false) throw new Error(envelope.result.error?.message ?? "保存设置失败");
+					const savedKeys = envelope.result?.value?.keys ?? {};
+					setTextKey(savedKeys["DEEPSEEK_API_KEY"] ?? "");
+					const savedModelKeys = {};
+					for (const item of models) {
+						const key = savedKeys[item.apiKeyEnv];
+						if (key !== void 0) savedModelKeys[item.id] = key;
+					}
+					setModelKeys(savedModelKeys);
 					setModels((prev) => prev.map((m) => {
 						const modelName = (m.models[0]?.name ?? "").trim();
 						return m.displayName === "自定义平台" && modelName !== "" ? {
@@ -1420,7 +1436,7 @@ window.__ModuleLoader__.load({
 						name: "settings.section",
 						id: "vision-plus",
 						order: 20,
-						label: () => "DeepSeek VisionPlus",
+						label: () => "VisionPlus",
 						inject: () => ({ api })
 					}, VisionSettingsPage));
 				} catch (error) {

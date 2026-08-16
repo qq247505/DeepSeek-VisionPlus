@@ -183,6 +183,23 @@ export function apply(ctx: Context, config: unknown): void {
   }
   migrateLegacy()
 
+  /** 解析设置引用的全部密钥（供界面自动填入；未配置的返回空） */
+  const resolveKeys = async (settings: VisionPlusSettings): Promise<Record<string, string>> => {
+    const refs = new Set<string>()
+    if (settings.text.apiKeyEnv !== undefined && settings.text.apiKeyEnv !== '') refs.add(settings.text.apiKeyEnv)
+    for (const vm of settings.visionModels) {
+      if (vm.apiKeyEnv !== undefined && vm.apiKeyEnv !== '') refs.add(vm.apiKeyEnv)
+    }
+    const out: Record<string, string> = {}
+    for (const ref of refs) {
+      try {
+        const resolved = await ctx.credentials.resolve(ref as never)
+        if (resolved?.value !== undefined) out[ref] = resolved.value
+      } catch { /* 未配置则忽略 */ }
+    }
+    return out
+  }
+
   // 自挂设置读写接口（零补丁；浏览器端设置页通过本接口读写）
   if (webServer !== undefined) {
     webServer.register({
@@ -198,7 +215,9 @@ export function apply(ctx: Context, config: unknown): void {
         }
         try {
           if ((req.method ?? 'GET').toUpperCase() === 'GET') {
-            respond({ type: 'server-response', rpcId: '', result: { ok: true, value: readSettings() } })
+            const settings = readSettings()
+            const keys = await resolveKeys(settings)
+            respond({ type: 'server-response', rpcId: '', result: { ok: true, value: { settings, keys } } })
             return
           }
           let raw = ''
@@ -210,7 +229,7 @@ export function apply(ctx: Context, config: unknown): void {
             return
           }
           await ctx.settings.replace(NS, next)
-          respond({ type: 'server-response', rpcId: '', result: { ok: true, value: readSettings() } })
+          respond({ type: 'server-response', rpcId: '', result: { ok: true, value: { settings: readSettings(), keys: await resolveKeys(next) } } })
         } catch (error) {
           respond({ type: 'server-response', rpcId: '', result: { ok: false, error: { code: 'internal', message: error instanceof Error ? error.message : String(error) } } })
         }
