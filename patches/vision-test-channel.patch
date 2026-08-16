@@ -202,3 +202,31 @@ index ac6c770..ca866ed 100644
      this.events = api.events
      this.downloads = api.downloads
      // createApiProxy returns closures (no `this` capture), so the bind is
+diff --git a/packages/host/apiproxy/tests/fetch-carrier.spec.ts b/packages/host/apiproxy/tests/fetch-carrier.spec.ts
+index 2000f70..c551fbc 100644
+--- a/packages/host/apiproxy/tests/fetch-carrier.spec.ts
++++ b/packages/host/apiproxy/tests/fetch-carrier.spec.ts
+@@ -282,6 +282,11 @@ function fakeApi(overrides: Partial<{ muxFrames: MuxFrame[]; hostFrames: HostFra
+         return { rpcId: request.rpcId, result: { ok: true, value: { models: [] } } }
+       },
+     },
++    visionPlus: {
++      async test(request) {
++        return { rpcId: request.rpcId, result: { ok: true, value: { ok: true, reply: 'OK' } } }
++      },
++    },
+     events: {
+       mux: (_request, signal) => stream(muxFrames, signal),
+       host: (_request, signal) => stream(hostFrames, signal),
+diff --git a/packages/host/apiproxy/tests/client-handler.spec.ts b/packages/host/apiproxy/tests/client-handler.spec.ts
+index 4130d8f..72945bf 100644
+--- a/packages/host/apiproxy/tests/client-handler.spec.ts
++++ b/packages/host/apiproxy/tests/client-handler.spec.ts
+@@ -128,6 +128,7 @@ function scriptedApi(overrides: {
+       discoverModels: err,
+       ...overrides.llm,
+     },
++    visionPlus: { test: r => ok(r, { ok: true, reply: 'OK' }) },
+     events: { mux: () => empty<MuxFrame>(), host: () => empty<HostFrame>(), ...overrides.events },
+     respond: overrides.respond ?? (() => Promise.resolve({ accepted: false as const, reason: 'not-pending' as const })),
+     downloads: { sessionLog: async () => new Response('stub', { status: 404 }) },
