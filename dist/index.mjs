@@ -3304,6 +3304,50 @@ function deepFreeze(value) {
 	return Object.freeze(value);
 }
 Service.init;
+/**
+* Value mirror of the `FiberState` members {@link isUnloading} compares
+* against: a const enum has no runtime object to import, and the value is
+* needed at runtime (same rationale as the CLI boot driver's mirror).
+*/
+const FIBER_DISPOSED = 4;
+const FIBER_UNLOADING = 5;
+/** Whether the consumer's own fiber is tearing down (not just losing the settings service). */
+function isUnloading(ctx) {
+	const state = ctx.fiber.state;
+	return state === FIBER_UNLOADING || state === FIBER_DISPOSED;
+}
+/**
+* Install the canonical optional-settings consumer wiring: while a settings
+* service exists, register `ns` with the consumer's composition entry as the
+* `base` layer and point the source thunk at the resolved scope; when the
+* service goes away (disposal, provider reload), fall back to the entry so
+* the consumer keeps working exactly as composed. The registration rides the
+* scoped fiber, so no settings service ever mounted means none of this runs.
+* @param ctx - consumer plugin context owning the wiring.
+* @param ns - the consumer-owned settings namespace.
+* @param schema - schema resolving the namespace (typically the plugin Config).
+* @param entry - the consumer's composition entry config, used as `base`.
+* @param hooks - source sink and change notification.
+*/
+function installSettingsSection(ctx, ns, schema, entry, hooks) {
+	ctx.inject(["settings"], (sctx) => {
+		const scope = sctx.settings.register(ns, schema, {
+			base: entry,
+			...hooks.validate === void 0 ? {} : { validate: hooks.validate }
+		});
+		hooks.setSource(() => scope.get());
+		sctx.effect(() => () => {
+			if (isUnloading(ctx)) return;
+			hooks.setSource(() => entry);
+			hooks.onChange();
+		});
+		hooks.onChange();
+		scope.watch(() => {
+			if (isUnloading(ctx)) return;
+			hooks.onChange();
+		});
+	});
+}
 //#endregion
 //#region ../../node_modules/.pnpm/@earendil-works+pi-ai@0.82._9916508ebaead6849a95c389aba67c68/node_modules/@earendil-works/pi-ai/dist/auth/helpers.js
 /**
@@ -28612,7 +28656,7 @@ function flattenText(message) {
 function toolResultText(blocks) {
 	return blocks.map((block) => block.type === "text" ? block.text : block.type === "tool-result" ? toolResultText(block.content) : "").join("");
 }
-async function userContent(blocks, attachments, skipImages = false) {
+async function userContent(blocks, attachments) {
 	const content = [];
 	for (const block of blocks) switch (block.type) {
 		case "text":
@@ -28622,7 +28666,6 @@ async function userContent(blocks, attachments, skipImages = false) {
 			});
 			break;
 		case "image": {
-			if (skipImages) break;
 			const stored = await attachments.readImage(block.attachment);
 			content.push({
 				type: "image",
@@ -28709,15 +28752,7 @@ function toPiContext(options, attachments) {
 async function toPiContextWithImages(options, attachments) {
 	const toolNames = /* @__PURE__ */ new Map();
 	const messages = [];
-	const srcMessages = options.messages.slice(-20);
-	let lastAssistant = -1;
-	for (let i = srcMessages.length - 1; i >= 0; i--) if (srcMessages[i].role === "assistant") {
-		lastAssistant = i;
-		break;
-	}
-	for (let i = 0; i < srcMessages.length; i++) {
-		const message = srcMessages[i];
-		const skipImages = i <= lastAssistant;
+	for (const message of options.messages) {
 		if (message.role === "system") {
 			if (contentHasImage$1(message.content)) throw new LlmError("pi-ai cannot represent an image in an in-history system message", "UNSUPPORTED_CONTENT");
 			messages.push({
@@ -28733,7 +28768,7 @@ async function toPiContextWithImages(options, attachments) {
 			messages.push(assistant);
 			continue;
 		}
-		const content = await userContent(message.content.filter((block) => block.type !== "tool-result"), attachments, skipImages);
+		const content = await userContent(message.content.filter((block) => block.type !== "tool-result"), attachments);
 		const results = message.content.filter((block) => block.type === "tool-result");
 		if (content.length > 0 || results.length === 0) messages.push({
 			role: "user",
@@ -28741,7 +28776,7 @@ async function toPiContextWithImages(options, attachments) {
 			timestamp: 0
 		});
 		for (const result of results) {
-			const resultContent = await userContent(result.content, attachments, skipImages);
+			const resultContent = await userContent(result.content, attachments);
 			messages.push({
 				role: "toolResult",
 				toolCallId: result.toolCallId,
@@ -30342,14 +30377,13 @@ function hasPendingImage(agent) {
 //#endregion
 //#region src/settings-schema.ts
 /**
-* vision-plus 设置命名空间 schema（平台化）：
-* - text：DeepSeek 文本后端（deepseek-official + 密钥）
-* - visionModels：视觉平台池 —— 每项是一个"平台"（OpenAI 兼容接口），
-*   平台内可挂多个该平台的模型（按顺序轮换）。
+* vision-plus 插件自己的设置命名空间（vision-plus）。
+* 零补丁设计：不再借用 llm-pi-ai 的 providers（那样会被内置 pi-ai 注册进
+* 模型选择器，需要宿主补丁隐藏）。读写走插件自挂的 HTTP 接口。
 */
 const optionalString = Schema.union([Schema.string(), Schema.const(void 0)]);
 const optionalNatural = Schema.union([Schema.natural(), Schema.const(void 0)]);
-const visionModelSchema = Schema.object({
+const modelSchema = Schema.object({
 	id: Schema.string(),
 	name: optionalString,
 	contextWindow: optionalNatural,
@@ -30360,50 +30394,25 @@ const visionProviderSchema = Schema.object({
 	displayName: Schema.string(),
 	baseURL: Schema.string(),
 	apiKeyEnv: Schema.string(),
-	models: Schema.array(visionModelSchema)
+	models: Schema.array(modelSchema)
 });
-Schema.object({
+const settingsSchema = Schema.object({
 	text: Schema.object({
-		provider: Schema.const("deepseek-official"),
-		apiKeyEnv: Schema.string().default("DEEPSEEK_API_KEY")
+		baseURL: Schema.string().default("https://api.deepseek.com"),
+		apiKeyEnv: Schema.string().default("DEEPSEEK_API_KEY"),
+		models: Schema.array(modelSchema)
 	}),
 	visionModels: Schema.array(visionProviderSchema)
 });
-/**
-* 预置免费视觉平台模板（默认值）。
-* 规格均为官方权威值：
-* - GLM-4.1V-Thinking-Flash：64K / 16K（智谱官方模型概览）
-* - GLM-4.6V-Flash：128K / 32K（智谱官方模型概览）
-* - Qwen3-VL-8B-Instruct（SiliconFlow）：64K / 16K
-* - Gemini 2.5 Flash：1M / 64K（Google 官方）
-*/
-const DEFAULT_VISION_MODELS = [{
-	id: "glm",
-	displayName: "智谱（GLM）",
-	baseURL: "https://open.bigmodel.cn/api/paas/v4",
-	apiKeyEnv: "GLM_API_KEY",
-	models: [{
-		id: "glm-4.1v-thinking-flash",
-		name: "GLM-4.1V-Thinking-Flash",
-		contextWindow: 65536,
-		maxTokens: 16384
-	}, {
-		id: "glm-4.6v-flash",
-		name: "GLM-4.6V-Flash",
-		contextWindow: 131072,
-		maxTokens: 32768
-	}]
+/** DeepSeek 文本后端默认模型（官方规格 1M 上下文） */
+const DEEPSEEK_MODELS_DEFAULT = [{
+	id: "deepseek-v4-pro",
+	name: "DeepSeek-V4-Pro",
+	contextWindow: 1048576
 }, {
-	id: "siliconflow",
-	displayName: "Qwen（千问）",
-	baseURL: "https://api.siliconflow.cn/v1",
-	apiKeyEnv: "SILICONFLOW_API_KEY",
-	models: [{
-		id: "Qwen/Qwen3-VL-8B-Instruct",
-		name: "Qwen3-VL-8B-Instruct",
-		contextWindow: 65536,
-		maxTokens: 16384
-	}]
+	id: "deepseek-v4-flash",
+	name: "DeepSeek-V4-Flash",
+	contextWindow: 1048576
 }];
 //#endregion
 //#region src/index.ts
@@ -30412,14 +30421,44 @@ const inject = [
 	"llm",
 	"credentials",
 	"attachments",
-	"settings"
+	"settings",
+	"agentDefaultModel",
+	"webServer"
 ];
-/** 视觉线路存放在官方 llm-pi-ai 命名空间（Web 客户端唯一可读写模型配置的通道）。 */
-const PI_NS = settingsNamespace("llm-pi-ai");
-const TEXT_BASE_URL = "https://api.deepseek.com";
-function buildProviders(piProviders) {
+/** 设置存放在插件自有命名空间 vision-plus（零补丁：不借用 llm-pi-ai，内部线路不进模型选择器）。 */
+const NS = "vision-plus";
+/** 文本后端（DeepSeek）与视觉池线路转成 pi-ai 内部 profile（只供本插件调用，不注册进宿主目录）。 */
+function buildProfiles(settings) {
 	const providers = {};
-	for (const [route, profile] of Object.entries(piProviders ?? {})) if (route.startsWith("vp-")) providers[route] = profile;
+	const textModels = settings.text.models.length > 0 ? settings.text.models : DEEPSEEK_MODELS_DEFAULT;
+	providers["vp-deepseek"] = {
+		displayName: "DeepSeek",
+		api: "openai-completions",
+		baseURL: settings.text.baseURL || "https://api.deepseek.com",
+		apiKeyEnv: settings.text.apiKeyEnv || "DEEPSEEK_API_KEY",
+		models: textModels.map((m) => ({
+			id: m.id,
+			name: m.name ?? m.id,
+			input: ["text"],
+			...m.contextWindow === void 0 ? {} : { contextWindow: m.contextWindow },
+			...m.maxTokens === void 0 ? {} : { maxTokens: m.maxTokens }
+		}))
+	};
+	settings.visionModels.forEach((vm, index) => {
+		providers[`vp-vision-${index}`] = {
+			displayName: vm.displayName,
+			api: "openai-completions",
+			baseURL: vm.baseURL,
+			apiKeyEnv: vm.apiKeyEnv,
+			models: vm.models.map((m) => ({
+				id: m.id,
+				name: m.name ?? m.id,
+				input: ["text", "image"],
+				...m.contextWindow === void 0 ? {} : { contextWindow: m.contextWindow },
+				...m.maxTokens === void 0 ? {} : { maxTokens: m.maxTokens }
+			}))
+		};
+	});
 	return providers;
 }
 /**
@@ -30431,144 +30470,208 @@ function buildProviders(piProviders) {
 */
 function apply(ctx, config) {
 	const cfg = Config.parse(config ?? {});
-	ctx.provide?.("vision-plus-test", { test: (input) => runVisionTest(ctx, input.route) });
-	let implantAttempts = 0;
-	const runImplant = () => {
-		if (implantAttempts >= 15) return;
-		implantAttempts += 1;
+	const webServer = ctx.webServer;
+	if (webServer === void 0) ctx.logger.warn("vision-plus: webServer 服务不可用，测试通道不可用");
+	else webServer.register({
+		kind: "exact",
+		path: "/api/visionPlus.test",
+		handler: async (req, res) => {
+			let responseSent = false;
+			const respond = (status, body) => {
+				if (responseSent) return;
+				responseSent = true;
+				res.writeHead(status, { "content-type": "application/json" });
+				res.end(JSON.stringify(body));
+			};
+			try {
+				let raw = "";
+				for await (const chunk of req) raw += chunk;
+				const parsed = JSON.parse(raw);
+				const route = parsed.payload?.route;
+				if (route === void 0 || route.length === 0) {
+					respond(200, {
+						type: "server-response",
+						rpcId: parsed.rpcId ?? "",
+						result: {
+							ok: true,
+							value: {
+								ok: false,
+								reason: "缺少 route 参数"
+							}
+						}
+					});
+					return;
+				}
+				const value = await runVisionTest(ctx, route);
+				respond(200, {
+					type: "server-response",
+					rpcId: parsed.rpcId ?? "",
+					result: {
+						ok: true,
+						value
+					}
+				});
+			} catch (error) {
+				respond(200, {
+					type: "server-response",
+					rpcId: "",
+					result: {
+						ok: false,
+						error: {
+							code: "internal",
+							message: error instanceof Error ? error.message : String(error)
+						}
+					}
+				});
+			}
+		}
+	});
+	const defaults = () => ({
+		text: {
+			baseURL: "https://api.deepseek.com",
+			apiKeyEnv: "DEEPSEEK_API_KEY",
+			models: DEEPSEEK_MODELS_DEFAULT.map((m) => ({ ...m }))
+		},
+		visionModels: []
+	});
+	let sourceThunk = () => defaults();
+	installSettingsSection(ctx, NS, settingsSchema, defaults(), {
+		setSource: (thunk) => {
+			sourceThunk = thunk;
+		},
+		onChange: () => {}
+	});
+	const readSettings = () => {
 		try {
-			const providers = ctx.settings.get(PI_NS)?.providers ?? {};
-			const finalProviders = {};
-			finalProviders["vp-deepseek"] = providers["vp-deepseek"] ?? {
-				displayName: "DeepSeek",
-				api: "openai-completions",
-				baseURL: TEXT_BASE_URL,
-				apiKeyEnv: "DEEPSEEK_API_KEY",
-				models: [{
-					id: "deepseek-v4-pro",
-					name: "DeepSeek-V4-Pro",
-					input: ["text"],
-					contextWindow: 1048576
-				}, {
-					id: "deepseek-v4-flash",
-					name: "DeepSeek-V4-Flash",
-					input: ["text"],
-					contextWindow: 1048576
-				}]
-			};
-			const legacy = providers["vp-glm46v"];
-			const glmCurrent = providers["vp-glm"];
-			if (legacy !== void 0 && glmCurrent !== void 0) {
-				const legacyModels = (legacy.models ?? []).filter((m) => typeof m?.id === "string");
-				const glmModels = [...glmCurrent.models ?? []];
-				for (const m of legacyModels) if (!glmModels.some((x) => x?.id === m.id)) glmModels.push(m);
-				finalProviders["vp-glm"] = {
-					...glmCurrent,
-					models: glmModels
-				};
-			} else if (legacy !== void 0) finalProviders["vp-glm"] = legacy;
-			else if (glmCurrent !== void 0) finalProviders["vp-glm"] = glmCurrent;
-			for (const model of DEFAULT_VISION_MODELS) {
-				const route = `vp-${model.id}`;
-				if (providers[route] !== void 0 && !(route in finalProviders)) finalProviders[route] = providers[route];
-			}
-			const templateRoutes = new Set(DEFAULT_VISION_MODELS.map((model) => `vp-${model.id}`));
-			for (const [route, value] of Object.entries(providers)) if (route.startsWith("vp-") && route !== "vp-deepseek" && route !== "vp-glm46v" && !templateRoutes.has(route) && !(route in finalProviders)) finalProviders[route] = value;
-			const SPEC_UPGRADES = {
-				"vp-deepseek": {
-					"deepseek-v4-pro": { contextWindow: {
-						from: 1e6,
-						to: 1048576
-					} },
-					"deepseek-v4-flash": { contextWindow: {
-						from: 1e6,
-						to: 1048576
-					} }
-				},
-				"vp-glm": {
-					"glm-4.1v-thinking-flash": {
-						contextWindow: {
-							from: 128e3,
-							to: 65536
-						},
-						maxTokens: { to: 16384 }
-					},
-					"glm-4.6v-flash": {
-						contextWindow: {
-							from: 128e3,
-							to: 131072
-						},
-						maxTokens: { to: 32768 }
-					}
-				},
-				"vp-siliconflow": { "Qwen/Qwen3-VL-8B-Instruct": { maxTokens: { to: 16384 } } }
-			};
-			for (const [route, upgrade] of Object.entries({
-				"vp-glm": {
-					from: ["GLM-4.1V-Thinking-Flash（免费）"],
-					to: "智谱（GLM）"
-				},
-				"vp-siliconflow": {
-					from: ["SiliconFlow Qwen3-VL-8B（免费）", "SiliconFlow（硅基流动）"],
-					to: "Qwen（千问）"
-				}
-			})) {
-				const provider = finalProviders[route];
-				if (provider === void 0) continue;
-				if (upgrade.from.includes(provider.displayName ?? "")) finalProviders[route] = {
-					...provider,
-					displayName: upgrade.to
-				};
-			}
-			for (const [route, upgrades] of Object.entries(SPEC_UPGRADES)) {
-				const provider = finalProviders[route];
-				if (provider === void 0) continue;
-				const models = (provider.models ?? []).map((m) => ({ ...m }));
-				let changed = false;
-				for (const m of models) {
-					const upgrade = upgrades[String(m.id ?? "")];
-					if (upgrade === void 0) continue;
-					const cw = upgrade.contextWindow;
-					if (cw !== void 0) {
-						const cur = m.contextWindow;
-						if (typeof cur !== "number" && cw.from === void 0 || cur === cw.from) {
-							m.contextWindow = cw.to;
-							changed = true;
-						}
-					}
-					const mt = upgrade.maxTokens;
-					if (mt !== void 0) {
-						const cur = m.maxTokens;
-						if (typeof cur !== "number" && mt.from === void 0 || cur === mt.from) {
-							m.maxTokens = mt.to;
-							changed = true;
-						}
-					}
-				}
-				if (changed) finalProviders[route] = {
-					...provider,
-					models
-				};
-			}
-			if (JSON.stringify(providers) !== JSON.stringify(finalProviders)) ctx.settings.mutate(PI_NS, [{
-				op: "set",
-				path: ["providers"],
-				value: finalProviders
-			}]).then(() => {
-				implantAttempts = 15;
-			}).catch(() => {
-				setTimeout(runImplant, 2e3);
-			});
-			else implantAttempts = 15;
+			return sourceThunk();
 		} catch {
-			setTimeout(runImplant, 2e3);
+			return defaults();
 		}
 	};
-	runImplant();
+	let migrateAttempts = 0;
+	const migrateLegacy = () => {
+		if (migrateAttempts >= 15) return;
+		migrateAttempts += 1;
+		try {
+			const providers = ctx.settings.get("llm-pi-ai")?.providers ?? {};
+			const vpRoutes = Object.keys(providers).filter((route) => route.startsWith("vp-") && route !== "vp-deepseek");
+			const current = readSettings();
+			if (vpRoutes.length === 0 || current.visionModels.length > 0) {
+				migrateAttempts = 15;
+				return;
+			}
+			const visionModels = vpRoutes.map((route, index) => {
+				const raw = providers[route];
+				return {
+					id: `vp-${index}`,
+					displayName: raw.displayName ?? route,
+					baseURL: raw.baseURL ?? "",
+					apiKeyEnv: raw.apiKeyEnv ?? "",
+					models: (raw.models ?? []).filter((m) => typeof m?.id === "string" && m.id.length > 0).map((m) => ({
+						id: m.id,
+						name: m.name ?? m.id,
+						...m.contextWindow === void 0 ? {} : { contextWindow: m.contextWindow },
+						...m.maxTokens === void 0 ? {} : { maxTokens: m.maxTokens }
+					}))
+				};
+			});
+			const migrated = {
+				text: {
+					baseURL: "https://api.deepseek.com",
+					apiKeyEnv: "DEEPSEEK_API_KEY",
+					models: (providers["vp-deepseek"]?.models ?? DEEPSEEK_MODELS_DEFAULT).filter((m) => typeof m?.id === "string").map((m) => ({
+						id: m.id,
+						name: m.name ?? m.id,
+						...m.contextWindow === void 0 ? {} : { contextWindow: m.contextWindow }
+					}))
+				},
+				visionModels
+			};
+			ctx.settings.replace(NS, migrated).then(() => {
+				const remaining = {};
+				for (const [route, value] of Object.entries(providers)) if (!route.startsWith("vp-")) remaining[route] = value;
+				ctx.settings.replace("llm-pi-ai", { providers: remaining }).catch(() => {});
+				migrateAttempts = 15;
+			}).catch(() => {
+				setTimeout(migrateLegacy, 2e3);
+			});
+		} catch {
+			setTimeout(migrateLegacy, 2e3);
+		}
+	};
+	migrateLegacy();
+	if (webServer !== void 0) webServer.register({
+		kind: "exact",
+		path: "/api/visionPlus.settings",
+		handler: async (req, res) => {
+			let sent = false;
+			const respond = (body) => {
+				if (sent) return;
+				sent = true;
+				res.writeHead(200, { "content-type": "application/json" });
+				res.end(JSON.stringify(body));
+			};
+			try {
+				if ((req.method ?? "GET").toUpperCase() === "GET") {
+					respond({
+						type: "server-response",
+						rpcId: "",
+						result: {
+							ok: true,
+							value: readSettings()
+						}
+					});
+					return;
+				}
+				let raw = "";
+				for await (const chunk of req) raw += chunk;
+				const next = JSON.parse(raw).settings;
+				if (next === void 0) {
+					respond({
+						type: "server-response",
+						rpcId: "",
+						result: {
+							ok: false,
+							error: {
+								code: "bad-request",
+								message: "缺少 settings 参数"
+							}
+						}
+					});
+					return;
+				}
+				await ctx.settings.replace(NS, next);
+				respond({
+					type: "server-response",
+					rpcId: "",
+					result: {
+						ok: true,
+						value: readSettings()
+					}
+				});
+			} catch (error) {
+				respond({
+					type: "server-response",
+					rpcId: "",
+					result: {
+						ok: false,
+						error: {
+							code: "internal",
+							message: error instanceof Error ? error.message : String(error)
+						}
+					}
+				});
+			}
+		}
+	});
+	try {
+		const defaultModelService = ctx.get("agentDefaultModel");
+		if (defaultModelService !== void 0 && typeof defaultModelService.saveSelection === "function") defaultModelService.saveSelection = async () => {};
+	} catch {
+		ctx.logger.warn("vision-plus: agentDefaultModel 服务不可用，会话级切换回退为官方行为");
+	}
 	const inner = new PiAiAdapter({
-		profiles: () => {
-			return resolveProfiles(buildProviders(ctx.settings.get(PI_NS)?.providers));
-		},
+		profiles: () => resolveProfiles(buildProfiles(readSettings())),
 		resolveApiKey: async (_provider, profile) => {
 			const ref = profile.apiKeyEnv;
 			if (typeof ref !== "string" || ref.length === 0) return void 0;
@@ -30581,21 +30684,20 @@ function apply(ctx, config) {
 		resolveAttachments: () => ctx.attachments ?? void 0
 	});
 	const poolOf = () => {
-		const providers = ctx.settings.get(PI_NS)?.providers ?? {};
+		const settings = readSettings();
 		const entries = [];
-		for (const [route, raw] of Object.entries(providers)) {
-			if (!route.startsWith("vp-") || route === "vp-deepseek") continue;
-			const profile = raw;
-			for (const m of profile.models ?? []) {
+		settings.visionModels.forEach((vm, index) => {
+			const provider = `vp-vision-${index}`;
+			for (const m of vm.models) {
 				if (typeof m?.id !== "string" || m.id.length === 0) continue;
 				entries.push({
-					id: `${route}/${m.id}`,
+					id: `${provider}/${m.id}`,
 					label: m.name ?? m.id,
-					provider: route,
+					provider,
 					model: m.id
 				});
 			}
-		}
+		});
 		return entries;
 	};
 	const pool = new VisionPool(poolOf, cfg.rateLimit);
@@ -30659,11 +30761,39 @@ function extractApiMessage(text) {
 */
 async function runVisionTest(ctx, route) {
 	try {
-		const raw = ctx.settings.get(PI_NS)?.providers?.[route];
-		if (raw === void 0) return {
-			ok: false,
-			reason: `未找到线路 ${route}（请先保存）`
+		const settings = (() => {
+			try {
+				return ctx.settings.get(NS);
+			} catch {
+				return;
+			}
+		})() ?? {
+			text: {
+				baseURL: "https://api.deepseek.com",
+				apiKeyEnv: "DEEPSEEK_API_KEY",
+				models: DEEPSEEK_MODELS_DEFAULT.map((m) => ({ ...m }))
+			},
+			visionModels: []
 		};
+		let raw;
+		if (route === "vp-deepseek") raw = {
+			baseURL: settings.text.baseURL,
+			apiKeyEnv: settings.text.apiKeyEnv,
+			models: settings.text.models.map((m) => ({ id: m.id }))
+		};
+		else {
+			const m = /^vp-vision-(\d+)$/.exec(route);
+			const vm = m === null ? void 0 : settings.visionModels[Number(m[1])];
+			if (vm === void 0) return {
+				ok: false,
+				reason: `未找到视觉模型 ${route}（请先保存）`
+			};
+			raw = {
+				baseURL: vm.baseURL,
+				apiKeyEnv: vm.apiKeyEnv,
+				models: vm.models.map((item) => ({ id: item.id }))
+			};
+		}
 		const baseURL = (raw.baseURL ?? "").trim();
 		if (!/^https?:\/\//i.test(baseURL)) return {
 			ok: false,
@@ -30699,7 +30829,7 @@ async function runVisionTest(ctx, route) {
 					text: "请只回复两个字：OK"
 				}] : "请只回复两个字：OK"
 			}],
-			max_tokens: isVision ? 1024 : 32,
+			max_tokens: 1024,
 			stream: false
 		};
 		const controller = new AbortController();

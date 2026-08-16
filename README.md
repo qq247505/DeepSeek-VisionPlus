@@ -36,21 +36,11 @@ DeepSeek 官方模型是纯文本模型，本身不能看图。DeepSeek VisionPl
 dsh plugin --profile web add github:qq247505/DeepSeek-VisionPlus
 ```
 
-安装脚本会按行业惯例自动定位 Harness 安装位置（见下文），应用增强补丁并重建宿主；找不到仓库或关键补丁无法应用时，安装会**直接失败并输出原因**（插件只有完整形态，不做降级）。
-
-### Harness 位置是如何找到的
-
-与 Harness 官方自身的"自定位"方式一致，按三层依次查找：
-
-1. 环境变量 `DSH_HARNESS_ROOT`（手动指定，最高优先级）；
-2. 从安装目录向上逐级查找（`package.json` 名称 + `packages/host/apiproxy` 目录标记校验）；
-3. 常见克隆路径 `D:\DeepSeek Harness` / `C:\DeepSeek Harness`（Windows 兜底）。
-
-> **限制**：通过 `npx @deepseek-ai/dsh web` 运行的纯 npm 用户没有本地安装目录，增强补丁无处应用，安装会失败并提示原因。需等待官方开放"插件注册 RPC / 槽位"的正式机制后，本插件才能覆盖纯 npm 安装方式。
+**零补丁插件**：不修改 Harness 源码，任何安装方式（源码运行 / 桌面端 / npm）装上即完整形态——设置卡片为独立栏目、测试为真实视觉测试、会话级模型切换不污染全局默认、内部线路不出现在模型选择器。
 
 ## 🚀 快速开始
 
-1. 重启 Harness，打开 设置 → 模型，展开 **DeepSeek VisionPlus** 卡片；
+1. 重启 Harness，打开 设置 → **DeepSeek VisionPlus**（独立栏目）卡片；
 2. DeepSeek 块填入 `DEEPSEEK_API_KEY`（API 地址默认官方 `https://api.deepseek.com`），点"测试"验证；
 3. 点 "＋ 智谱（GLM）" / "＋ Qwen（千问）" 添加视觉模型，填入对应密钥（`GLM_API_KEY` / `SILICONFLOW_API_KEY`），各点"测试"验证；
 4. 保存 → 对话页模型选择器选择 **DeepSeek-V4-Pro 视觉**（或 Flash 视觉）；
@@ -66,19 +56,12 @@ dsh plugin --profile web add github:qq247505/DeepSeek-VisionPlus
 
 > 数值来自官方文档模型概览与实测 API 限制；自定义模型按对方官方文档填写。
 
-## 🧩 增强补丁
+## 🧩 架构说明
 
-核心功能不需要补丁；安装时自动应用以下增强补丁（需能定位 Harness 安装位置）：
-
-| 补丁 | 增强内容 |
-|---|---|
-| models-extra-slot | 设置卡片内嵌到官方"模型"页 |
-| vision-test-channel | 测试按钮升级为真实视觉测试 |
-| session-switch | 会话级模型切换（不污染全局默认） |
-| token-clamp | 会话记账钳制（防负数崩溃） |
-| hide-vision-cards | 会话模型选择器隐藏内部线路 |
-
-手动应用：把 `patches\增强补丁.bat` 复制到 Harness 仓库根目录双击执行。
+- **设置存储**：配置保存在插件自有命名空间，通过插件自挂接口读写（`/api/visionPlus.settings`）——不借用 llm-pi-ai，内部线路不会出现在模型选择器；
+- **真实视觉测试**：插件通过官方 `webServer` 服务自挂接口（`/api/visionPlus.test`），按各平台官方对接方式真实请求；
+- **会话级模型切换**：运行时接管 `agentDefaultModel.saveSelection`（其唯一调用方是会话切换，已核实），切换只影响当前会话、不污染全局默认；
+- **零补丁**：以上全部为插件运行时能力，不修改 Harness 源码，npm / 源码两种安装方式完全一致。
 
 ## ❓ 常见问题
 
@@ -93,7 +76,7 @@ dsh plugin --profile web add github:qq247505/DeepSeek-VisionPlus
 dsh plugin --profile web remove dsh-visionplus
 ```
 
-卸载时会自动回退全部增强补丁并重建宿主，恢复到安装前的官方状态。
+零补丁插件：卸载即干净，无需回退任何宿主改动。
 
 ## 🤝 参与贡献
 

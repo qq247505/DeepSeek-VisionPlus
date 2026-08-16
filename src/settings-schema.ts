@@ -1,16 +1,15 @@
 import z from '@deepseek-ai/schemastery'
 
 /**
- * vision-plus 设置命名空间 schema（平台化）：
- * - text：DeepSeek 文本后端（deepseek-official + 密钥）
- * - visionModels：视觉平台池 —— 每项是一个"平台"（OpenAI 兼容接口），
- *   平台内可挂多个该平台的模型（按顺序轮换）。
+ * vision-plus 插件自己的设置命名空间（vision-plus）。
+ * 零补丁设计：不再借用 llm-pi-ai 的 providers（那样会被内置 pi-ai 注册进
+ * 模型选择器，需要宿主补丁隐藏）。读写走插件自挂的 HTTP 接口。
  */
 
 const optionalString = z.union([z.string(), z.const(undefined)])
 const optionalNatural = z.union([z.natural(), z.const(undefined)])
 
-const visionModelSchema = z.object({
+const modelSchema = z.object({
   id: z.string(),
   name: optionalString,
   contextWindow: optionalNatural,
@@ -22,41 +21,40 @@ const visionProviderSchema = z.object({
   displayName: z.string(),
   baseURL: z.string(),
   apiKeyEnv: z.string(),
-  models: z.array(visionModelSchema),
+  models: z.array(modelSchema),
 })
 
 export const settingsSchema = z.object({
   text: z.object({
-    provider: z.const('deepseek-official'),
+    baseURL: z.string().default('https://api.deepseek.com'),
     apiKeyEnv: z.string().default('DEEPSEEK_API_KEY'),
+    models: z.array(modelSchema),
   }),
   visionModels: z.array(visionProviderSchema),
 })
 
 export type VisionPlusSettings = {
-  text: { provider: 'deepseek-official', apiKeyEnv: string }
+  text: {
+    baseURL: string
+    apiKeyEnv: string
+    models: Array<{ id: string, name?: string, contextWindow?: number, maxTokens?: number }>
+  }
   visionModels: Array<{
     id: string
     displayName: string
     baseURL: string
     apiKeyEnv: string
-    models: Array<{
-      id: string
-      name?: string
-      contextWindow?: number
-      maxTokens?: number
-    }>
+    models: Array<{ id: string, name?: string, contextWindow?: number, maxTokens?: number }>
   }>
 }
 
-/**
- * 预置免费视觉平台模板（默认值）。
- * 规格均为官方权威值：
- * - GLM-4.1V-Thinking-Flash：64K / 16K（智谱官方模型概览）
- * - GLM-4.6V-Flash：128K / 32K（智谱官方模型概览）
- * - Qwen3-VL-8B-Instruct（SiliconFlow）：64K / 16K
- * - Gemini 2.5 Flash：1M / 64K（Google 官方）
- */
+/** DeepSeek 文本后端默认模型（官方规格 1M 上下文） */
+export const DEEPSEEK_MODELS_DEFAULT: VisionPlusSettings['text']['models'] = [
+  { id: 'deepseek-v4-pro', name: 'DeepSeek-V4-Pro', contextWindow: 1048576 },
+  { id: 'deepseek-v4-flash', name: 'DeepSeek-V4-Flash', contextWindow: 1048576 },
+]
+
+/** 预置免费视觉模型模板（权威官方规格） */
 export const DEFAULT_VISION_MODELS: VisionPlusSettings['visionModels'] = [
   {
     id: 'glm',
@@ -77,5 +75,4 @@ export const DEFAULT_VISION_MODELS: VisionPlusSettings['visionModels'] = [
       { id: 'Qwen/Qwen3-VL-8B-Instruct', name: 'Qwen3-VL-8B-Instruct', contextWindow: 65536, maxTokens: 16384 },
     ],
   },
-
 ]

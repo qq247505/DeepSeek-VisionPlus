@@ -17,11 +17,23 @@ interface ApiFace {
 
 interface ModelDraft { id: string, name: string, contextWindow: number | undefined, maxTokens?: number | undefined }
 interface ProviderDraft {
-  route: string
+  id: string
   displayName: string
   baseURL: string
   apiKeyEnv: string
   models: ModelDraft[]
+}
+
+/** 自挂设置接口的线格式（与节点端 VisionPlusSettings 一致） */
+interface VisionSettingsWire {
+  text: { baseURL?: string, apiKeyEnv?: string, models?: Array<{ id: string, name?: string, contextWindow?: number, maxTokens?: number }> }
+  visionModels?: Array<{
+    id: string
+    displayName: string
+    baseURL: string
+    apiKeyEnv: string
+    models?: Array<{ id: string, name?: string, contextWindow?: number, maxTokens?: number }>
+  }>
 }
 
 interface PiProviderValue {
@@ -31,7 +43,7 @@ interface PiProviderValue {
   models?: Array<{ id: string, name?: string, contextWindow?: number, maxTokens?: number }>
 }
 
-const TEMPLATES: Array<{ label: string, platformId?: string, draft: Omit<ProviderDraft, 'route'> }> = [
+const TEMPLATES: Array<{ label: string, platformId?: string, draft: Omit<ProviderDraft, 'id'> }> = [
   { label: '智谱（GLM）', platformId: 'glm', draft: { displayName: '智谱（GLM）', baseURL: 'https://open.bigmodel.cn/api/paas/v4', apiKeyEnv: 'GLM_API_KEY', models: [
     { id: 'glm-4.1v-thinking-flash', name: 'GLM-4.1V-Thinking-Flash', contextWindow: 65536, maxTokens: 16384 },
     { id: 'glm-4.6v-flash', name: 'GLM-4.6V-Flash', contextWindow: 131072, maxTokens: 32768 },
@@ -48,7 +60,7 @@ const PLATFORM_DEFAULTS: Record<string, ModelDraft[]> = Object.fromEntries(
   TEMPLATES.filter(t => t.platformId !== undefined).map(t => [`vp-${t.platformId}`, t.draft.models.map(m => ({ ...m }))]),
 )
 
-const DEEPSEEK_DEFAULT: Omit<ProviderDraft, 'route'> = {
+const DEEPSEEK_DEFAULT: Omit<ProviderDraft, 'id'> = {
   displayName: 'DeepSeek',
   baseURL: 'https://api.deepseek.com',
   apiKeyEnv: 'DEEPSEEK_API_KEY',
@@ -363,7 +375,7 @@ function unwrap<T>(response: unknown): T {
 export function VisionSettingsPage(props: { api: ApiFace, close: () => void }): React.ReactElement {
   const api = props.api
   const [editing, setEditing] = useState(false)
-  const [deepseek, setDeepseek] = useState<Omit<ProviderDraft, 'route'>>(DEEPSEEK_DEFAULT)
+  const [deepseek, setDeepseek] = useState<Omit<ProviderDraft, 'id'>>(DEEPSEEK_DEFAULT)
   const [models, setModels] = useState<ProviderDraft[]>([])
   const [loaded, setLoaded] = useState(false)
   const [textKey, setTextKey] = useState('')
@@ -386,35 +398,28 @@ export function VisionSettingsPage(props: { api: ApiFace, close: () => void }): 
 
   const loadFromSettings = async (): Promise<void> => {
     try {
-      const desc = unwrap<{ value?: { namespaces?: Array<{ ns: string, value?: unknown }> } }>(await api.settings.describe({}))
-      const ns = desc.value?.namespaces?.find(item => item.ns === 'llm-pi-ai')
-      const providers = (ns?.value as { providers?: Record<string, PiProviderValue> } | undefined)?.providers ?? {}
-      if (ns === undefined) {
-        console.warn('[vision-plus] describe 未返回 llm-pi-ai 命名空间，可用:', desc.value?.namespaces?.map(n => n.ns)?.join(', '))
-      } else {
-        console.info('[vision-plus] llm-pi-ai providers:', Object.keys(providers).join(', '))
+      const response = await fetch('/api/visionPlus.settings')
+      const envelope = await response.json() as { result?: { ok?: boolean, value?: VisionSettingsWire, error?: { message?: string } } }
+      const settings = envelope.result?.ok === false ? undefined : envelope.result?.value
+      if (settings === undefined) {
+        setMessage('载入失败：' + (envelope.result?.error?.message ?? '设置接口不可用'))
+        setLoaded(true)
+        return
       }
-      const ds = providers['vp-deepseek']
-      if (ds !== undefined) {
-        setDeepseek({
-          displayName: ds.displayName ?? 'DeepSeek',
-          baseURL: ds.baseURL ?? DEEPSEEK_DEFAULT.baseURL,
-          apiKeyEnv: ds.apiKeyEnv ?? 'DEEPSEEK_API_KEY',
-          models: (ds.models ?? []).map(m => ({ id: m.id, name: m.name ?? m.id, contextWindow: m.contextWindow, maxTokens: m.maxTokens })),
-        })
-      }
+      setDeepseek({
+        displayName: 'DeepSeek',
+        baseURL: settings.text.baseURL || 'https://api.deepseek.com',
+        apiKeyEnv: settings.text.apiKeyEnv || 'DEEPSEEK_API_KEY',
+        models: (settings.text.models ?? []).map(m => ({ id: m.id, name: m.name ?? m.id, contextWindow: m.contextWindow, maxTokens: m.maxTokens })),
+      })
       setDeletedRoutes(new Set())
-      const drafts: ProviderDraft[] = []
-      for (const [route, provider] of Object.entries(providers)) {
-        if (!route.startsWith('vp-') || route === 'vp-deepseek') continue
-        drafts.push({
-          route,
-          displayName: provider.displayName ?? route,
-          baseURL: provider.baseURL ?? '',
-          apiKeyEnv: provider.apiKeyEnv ?? '',
-          models: (provider.models ?? []).map(m => ({ id: m.id, name: m.name ?? m.id, contextWindow: m.contextWindow, maxTokens: m.maxTokens })),
-        })
-      }
+      const drafts: ProviderDraft[] = (settings.visionModels ?? []).map(vm => ({
+        id: vm.id,
+        displayName: vm.displayName,
+        baseURL: vm.baseURL,
+        apiKeyEnv: vm.apiKeyEnv,
+        models: (vm.models ?? []).map(m => ({ id: m.id, name: m.name ?? m.id, contextWindow: m.contextWindow, maxTokens: m.maxTokens })),
+      }))
       setModels(drafts)
       const refs = ['DEEPSEEK_API_KEY', ...drafts.map(item => item.apiKeyEnv)].filter(Boolean)
       if (refs.length > 0) {
@@ -439,8 +444,8 @@ export function VisionSettingsPage(props: { api: ApiFace, close: () => void }): 
     const next = prev.filter((_, i) => i !== index)
     const removed = prev[index]
     if (removed !== undefined) {
-      if (openId === removed.route) setOpenId(null)
-      setDeletedRoutes(current => new Set(current).add(removed.route))
+      if (openId === removed.id) setOpenId(null)
+      setDeletedRoutes(current => new Set(current).add(removed.id))
     }
     return next
   })
@@ -469,39 +474,14 @@ export function VisionSettingsPage(props: { api: ApiFace, close: () => void }): 
           payload: { route },
         }),
       })
-      if (response.status === 404) {
-        // 未打增强补丁：走降级
-        return await degradedTest(route)
-      }
+
       const envelope = await response.json() as { result?: { ok?: boolean, value?: { ok: boolean, reply?: string, reason?: string }, error?: { message?: string } } }
       const result = envelope.result
       if (result === undefined) throw new Error(`测试通道不可用（HTTP ${response.status}）`)
       if (result.ok !== true) throw new Error(result.error?.message ?? '测试通道返回错误')
       return result.value ?? { ok: false, reason: '空结果' }
     } catch (error) {
-      if (error instanceof Error && error.message.includes('测试通道不可用')) {
-        return await degradedTest(route)
-      }
       throw error
-    }
-  }
-
-  /** 降级探测：官方 llm.discoverModels（接口连通 + 密钥有效性；不验证视觉能力） */
-  const degradedTest = async (route: string): Promise<{ ok: boolean, reply?: string, reason?: string, degraded?: boolean }> => {
-    const baseURL = route === 'vp-deepseek' ? deepseek.baseURL.trim() : (models.find(m => m.route === route)?.baseURL ?? '').trim()
-    if (!/^https?:\/\//i.test(baseURL)) return { ok: false, reason: 'API 地址不合法（需以 http(s):// 开头）' }
-    try {
-      const res = unwrap<{ ok?: boolean, error?: { message?: string }, value?: { models?: Array<{ id: string }> } }>(
-        await api.llm.discoverModels({ settingsNs: 'llm-pi-ai', provider: route, baseURL, api: 'openai-completions' }),
-      )
-      if (res.ok === false) {
-        const reason = (res.error?.message ?? '未知错误').replace(/\s+/g, ' ').trim()
-        return { ok: false, reason: reason.length > 140 ? `${reason.slice(0, 140)}…` : reason, degraded: true }
-      }
-      return { ok: true, reply: '接口连通，密钥有效（列表探测）', degraded: true }
-    } catch (error) {
-      const reason = String(error).replace(/\s+/g, ' ').trim()
-      return { ok: false, reason: reason.length > 140 ? `${reason.slice(0, 140)}…` : reason, degraded: true }
     }
   }
 
@@ -547,7 +527,7 @@ export function VisionSettingsPage(props: { api: ApiFace, close: () => void }): 
   const testPlatform = async (index: number): Promise<void> => {
     const item = models[index]
     if (item === undefined) return
-    setTesting(item.route)
+    setTesting(item.id)
     try {
       // 1) 参数校验
       if (configured[item.apiKeyEnv] !== true) {
@@ -564,7 +544,7 @@ export function VisionSettingsPage(props: { api: ApiFace, close: () => void }): 
         return
       }
       // 2) 官方上限校验（预置平台模板里有官方权威值）
-      const official = PLATFORM_DEFAULTS[item.route]
+      const official = PLATFORM_DEFAULTS[item.id]
       if (official !== undefined) {
         for (const m of item.models) {
           const off = official.find(o => o.id === m.id)
@@ -580,12 +560,12 @@ export function VisionSettingsPage(props: { api: ApiFace, close: () => void }): 
         }
       }
       // 3) 真实探测（宿主用该平台存储的密钥请求接口）
-      const result = await callVisionTest(item.route)
+      const result = await callVisionTest(`vp-vision-${index}`)
       if (!result.ok) {
         showToast('err', `❌ 测试失败：${result.reason ?? '未知原因'}`)
         return
       }
-      showToast('ok', result.degraded === true ? `✅ ${item.displayName || '该平台'} 测试成功：${result.reply ?? 'OK'}` : `✅ ${item.displayName || '该平台'} 测试成功：OK`)
+      showToast('ok', `✅ ${item.displayName || '该平台'} 测试成功：OK`)
     } catch (error) {
       const reason = String(error).replace(/\s+/g, ' ').trim()
       showToast('err', `❌ 测试失败：${reason.length > 140 ? `${reason.slice(0, 140)}…` : reason}`)
@@ -601,19 +581,32 @@ export function VisionSettingsPage(props: { api: ApiFace, close: () => void }): 
     setBusy(true)
     setMessage('')
     try {
-      const desc = unwrap<{ value?: { namespaces?: Array<{ ns: string, value?: unknown }> } }>(await api.settings.describe({}))
-      const ns = desc.value?.namespaces?.find(n => n.ns === 'llm-pi-ai')
-      const providers = (ns?.value as { providers?: Record<string, unknown> } | undefined)?.providers ?? {}
-      const finalProviders: Record<string, unknown> = {}
-      for (const [route, value] of Object.entries(providers)) {
-        if (route === target.route) continue
-        finalProviders[route] = value
+      const settings: VisionSettingsWire = {
+        text: {
+          baseURL: deepseek.baseURL,
+          apiKeyEnv: deepseek.apiKeyEnv || 'DEEPSEEK_API_KEY',
+          models: deepseek.models.map(m => ({ id: m.id, name: m.name, contextWindow: m.contextWindow, maxTokens: m.maxTokens })),
+        },
+        visionModels: models
+          .filter(item => item.id !== target.id)
+          .map(item => ({
+            id: item.id,
+            displayName: item.displayName,
+            baseURL: item.baseURL,
+            apiKeyEnv: item.apiKeyEnv,
+            models: item.models.map(m => ({ id: m.id, name: m.name, contextWindow: m.contextWindow, maxTokens: m.maxTokens })),
+          })),
       }
-      const r = unwrap<{ ok?: boolean, error?: { message?: string } }>(await api.settings.mutate({ ns: 'llm-pi-ai', ops: [{ op: 'set', path: ['providers'], value: finalProviders }] }))
-      if (r.ok === false) throw new Error(r.error?.message ?? '删除失败')
+      const response = await fetch('/api/visionPlus.settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ settings }),
+      })
+      const envelope = await response.json() as { result?: { ok?: boolean, error?: { message?: string } } }
+      if (envelope.result?.ok === false) throw new Error(envelope.result.error?.message ?? '删除失败')
       setModels(prev => prev.filter((_, i) => i !== index))
-      setDeletedRoutes(current => new Set(current).add(target.route))
-      if (openId === target.route) setOpenId(null)
+      setDeletedRoutes(current => new Set(current).add(target.id))
+      if (openId === target.id) setOpenId(null)
       setMessage('✅ 已删除并保存')
     } catch (error) {
       const reason = String(error).replace(/\s+/g, ' ').trim()
@@ -623,14 +616,14 @@ export function VisionSettingsPage(props: { api: ApiFace, close: () => void }): 
       setBusy(false)
     }
   }
-  const addTemplate = (template: { label: string, platformId?: string, draft: Omit<ProviderDraft, 'route'> }): void => {
+  const addTemplate = (template: { label: string, platformId?: string, draft: Omit<ProviderDraft, 'id'> }): void => {
     const draft = template.draft
-    // 预置平台：固定路由，已添加则不再重复添加
+    // 预置平台：固定 id，已添加则不再重复添加
     if (template.platformId !== undefined) {
-      const route = `vp-${template.platformId}`
-      if (models.some(m => m.route === route)) return
-      setModels(prev => [...prev, { ...draft, route, models: draft.models.map(m => ({ ...m })) }])
-      setOpenId(route)
+      const id = template.platformId
+      if (models.some(m => m.id === id)) return
+      setModels(prev => [...prev, { ...draft, id, models: draft.models.map(m => ({ ...m })) }])
+      setOpenId(id)
       return
     }
     const suffix = Date.now().toString(36)
@@ -638,24 +631,12 @@ export function VisionSettingsPage(props: { api: ApiFace, close: () => void }): 
     const apiKeyEnv = draft.apiKeyEnv.trim() !== ''
       ? draft.apiKeyEnv
       : `VP_${suffix.toUpperCase()}_API_KEY`
-    const fresh: ProviderDraft = { ...draft, route: `vp-${suffix}`, apiKeyEnv }
+    const fresh: ProviderDraft = { ...draft, id: `vp-${suffix}`, apiKeyEnv }
     setModels(prev => [...prev, fresh])
-    setOpenId(fresh.route)
+    setOpenId(fresh.id)
   }
 
-  const providerValue = (draft: Omit<ProviderDraft, 'route'>, imageCapable: boolean): Record<string, unknown> => ({
-    displayName: draft.displayName,
-    api: 'openai-completions',
-    baseURL: draft.baseURL,
-    apiKeyEnv: draft.apiKeyEnv,
-    models: draft.models.map(m => ({
-      id: m.id,
-      name: m.name,
-      input: imageCapable ? ['text', 'image'] : ['text'],
-      ...(m.contextWindow === undefined ? {} : { contextWindow: m.contextWindow }),
-      ...(m.maxTokens === undefined ? {} : { maxTokens: m.maxTokens }),
-    })),
-  })
+
 
   const save = async (): Promise<void> => {
     setBusy(true)
@@ -667,38 +648,39 @@ export function VisionSettingsPage(props: { api: ApiFace, close: () => void }): 
         if (r.ok === false) throw new Error(r.error?.message ?? '写入 DeepSeek 密钥失败')
       }
       for (const item of models) {
-        const key = (modelKeys[item.route] ?? '').trim()
+        const key = (modelKeys[item.id] ?? '').trim()
         if (key.length > 0 && item.apiKeyEnv) {
           const r = unwrap<{ ok?: boolean, error?: { message?: string } }>(await api.credentials.set({ ref: item.apiKeyEnv, value: key }))
           if (r.ok === false) throw new Error(r.error?.message ?? `写入 ${item.displayName} 密钥失败`)
         }
       }
-      const desc = unwrap<{ value?: { namespaces?: Array<{ ns: string, value?: unknown }> } }>(await api.settings.describe({}))
-      const ns = desc.value?.namespaces?.find(n => n.ns === 'llm-pi-ai')
-      const providers = (ns?.value as { providers?: Record<string, unknown> } | undefined)?.providers ?? {}
-      // harness 的 settings.mutate 只支持 'set' 操作：整体重建 providers 映射
-      // （删除的路线不在新映射里即等于移除）
-      const finalProviders: Record<string, unknown> = {}
-      for (const [route, value] of Object.entries(providers)) {
-        if (!route.startsWith('vp-')) finalProviders[route] = value
+      const settings: VisionSettingsWire = {
+        text: {
+          baseURL: deepseek.baseURL,
+          apiKeyEnv: deepseek.apiKeyEnv || 'DEEPSEEK_API_KEY',
+          models: deepseek.models.map(m => ({ id: m.id, name: m.name, contextWindow: m.contextWindow, maxTokens: m.maxTokens })),
+        },
+        visionModels: models.map(item => {
+          const modelName = (item.models[0]?.name ?? '').trim()
+          const synced = item.displayName === '自定义平台' && modelName !== ''
+            ? { ...item, displayName: modelName }
+            : item
+          return {
+            id: synced.id,
+            displayName: synced.displayName,
+            baseURL: synced.baseURL,
+            apiKeyEnv: synced.apiKeyEnv,
+            models: synced.models.map(m => ({ id: m.id, name: m.name, contextWindow: m.contextWindow, maxTokens: m.maxTokens })),
+          }
+        }),
       }
-      finalProviders['vp-deepseek'] = providerValue(deepseek, false)
-      for (const item of models) {
-        // 自定义平台：显示名跟随首个模型名持久化（用户填了模型名就同步，没填保持默认）
-        const modelName = (item.models[0]?.name ?? '').trim()
-        const synced = item.displayName === '自定义平台' && modelName !== ''
-          ? { ...item, displayName: modelName }
-          : item
-        finalProviders[item.route] = providerValue(synced, true)
-      }
-      // 数据安全：wire 里存在但页面状态没有的路由，除非被显式删除，否则一律保留
-      for (const [route, value] of Object.entries(providers)) {
-        if (!route.startsWith('vp-') || route === 'vp-deepseek') continue
-        if (deletedRoutes.has(route)) continue
-        if (!(route in finalProviders)) finalProviders[route] = value
-      }
-      const r = unwrap<{ ok?: boolean, error?: { message?: string } }>(await api.settings.mutate({ ns: 'llm-pi-ai', ops: [{ op: 'set', path: ['providers'], value: finalProviders }] }))
-      if (r.ok === false) throw new Error(r.error?.message ?? '保存设置失败')
+      const response = await fetch('/api/visionPlus.settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ settings }),
+      })
+      const envelope = await response.json() as { result?: { ok?: boolean, error?: { message?: string } } }
+      if (envelope.result?.ok === false) throw new Error(envelope.result.error?.message ?? '保存设置失败')
       // 保存后：自定义平台的显示名同步为模型名（仅本地状态，配置已持久化）
       setModels(prev => prev.map(m => {
         const modelName = (m.models[0]?.name ?? '').trim()
@@ -767,12 +749,12 @@ export function VisionSettingsPage(props: { api: ApiFace, close: () => void }): 
             {loaded && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 {models.map((item, index) => {
-                  const open = openId === item.route
+                  const open = openId === item.id
                   return (
-                    <div key={item.route} style={S.rowCard}>
+                    <div key={item.id} style={S.rowCard}>
                       <div style={S.rowHead}>
                         <span style={S.rowIdentity}>
-                          <button type="button" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: 0, background: 'transparent', border: 'none', cursor: 'pointer', minWidth: 0 }} onClick={() => setOpenId(open ? null : item.route)}>
+                          <button type="button" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: 0, background: 'transparent', border: 'none', cursor: 'pointer', minWidth: 0 }} onClick={() => setOpenId(open ? null : item.id)}>
                             <Chevron open={open} />
                             <span style={S.rowName}>{item.displayName || `模型 ${index + 1}`}</span>
                           </button>
@@ -782,7 +764,7 @@ export function VisionSettingsPage(props: { api: ApiFace, close: () => void }): 
                         </span>
                         <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", marginLeft: "auto" }}>
                           <button type="button" style={S.rowEditButton} disabled={testing !== null} onClick={() => void testPlatform(index)}>
-                            {testing === item.route ? '测试中…' : '测试'}
+                            {testing === item.id ? '测试中…' : '测试'}
                           </button>
                           <button type="button" style={S.iconButton} disabled={busy} onClick={() => void deletePlatform(index)} title={L.delete}><TrashIcon /></button>
                         </span>
@@ -793,17 +775,17 @@ export function VisionSettingsPage(props: { api: ApiFace, close: () => void }): 
                             name={item.displayName}
                             hideTitle
                             keyRef={item.apiKeyEnv}
-                            keyValue={modelKeys[item.route] ?? ''}
-                            onKeyChange={(value) => setModelKeys(prev => ({ ...prev, [item.route]: value }))}
+                            keyValue={modelKeys[item.id] ?? ''}
+                            onKeyChange={(value) => setModelKeys(prev => ({ ...prev, [item.id]: value }))}
                             configured={configured[item.apiKeyEnv] === true}
                             custom={{ baseURL: item.baseURL, displayName: item.displayName, apiKeyEnv: item.apiKeyEnv }}
                             onCustomChange={(patch) => updateModel(index, patch)}
                             models={item.models}
-                            defaults={PLATFORM_DEFAULTS[item.route] ?? []}
+                            defaults={PLATFORM_DEFAULTS[item.id] ?? []}
                             onModelUpdate={(mi, patch) => setModels(prev => prev.map((p, i) => (i === index ? { ...p, models: p.models.map((m, j) => (j === mi ? { ...m, ...patch } : m)) } : p)))}
                             onModelAdd={() => setModels(prev => prev.map((p, i) => (i === index ? { ...p, models: [...p.models, { id: '', name: '', contextWindow: undefined }] } : p)))}
                             onModelRemove={(mi) => setModels(prev => prev.map((p, i) => (i === index ? { ...p, models: p.models.filter((_, j) => j !== mi) } : p)))}
-                            onModelReset={() => setModels(prev => prev.map((p, i) => (i === index ? { ...p, models: (PLATFORM_DEFAULTS[item.route] ?? []).map(m => ({ ...m })) } : p)))}
+                            onModelReset={() => setModels(prev => prev.map((p, i) => (i === index ? { ...p, models: (PLATFORM_DEFAULTS[item.id] ?? []).map(m => ({ ...m })) } : p)))}
                           />
                         </div>
                       )}
@@ -812,7 +794,7 @@ export function VisionSettingsPage(props: { api: ApiFace, close: () => void }): 
                 })}
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
                   {TEMPLATES.map(template => {
-                    const added = template.platformId !== undefined && models.some(m => m.route === `vp-${template.platformId}`)
+                    const added = template.platformId !== undefined && models.some(m => m.id === `vp-${template.platformId}`)
                     return (
                       <button
                         key={template.label}

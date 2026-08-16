@@ -1,17 +1,7 @@
-# vision-plus 插件
+# 增强补丁（已退役）
 
-## 安装
+DeepSeek VisionPlus v2 起为零补丁插件：核心功能与全部体验增强
+（真实视觉测试、会话级切换、隐藏内部线路、独立设置栏目）都不再需要修改
+Harness 源码，任何安装方式（源码 / npm）装上即是完整形态。
 
-```bash
-dsh plugin --profile web add dsh-vision-plus
-# 或本地目录：
-dsh plugin --profile web add <本目录>
-```
-
-## 可选增强补丁（需要改 Harness 源码时）
-
-1. 把 `patches\增强补丁.bat` 复制到 Harness 仓库**根目录**；
-2. 双击执行（应用补丁 + 完整重建）；
-3. 重启 Harness。
-
-详见 README.md。
+此目录保留作为历史说明，安装/卸载脚本不再应用任何补丁。

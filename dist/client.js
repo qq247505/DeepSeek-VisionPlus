@@ -768,17 +768,18 @@ window.__ModuleLoader__.load({
 			const toastTimer = (0, react.useRef)(null);
 			const loadFromSettings = async () => {
 				try {
-					const desc = unwrap(await api.settings.describe({}));
-					const ns = desc.value?.namespaces?.find((item) => item.ns === "llm-pi-ai");
-					const providers = (ns?.value)?.providers ?? {};
-					if (ns === void 0) console.warn("[vision-plus] describe 未返回 llm-pi-ai 命名空间，可用:", desc.value?.namespaces?.map((n) => n.ns)?.join(", "));
-					else console.info("[vision-plus] llm-pi-ai providers:", Object.keys(providers).join(", "));
-					const ds = providers["vp-deepseek"];
-					if (ds !== void 0) setDeepseek({
-						displayName: ds.displayName ?? "DeepSeek",
-						baseURL: ds.baseURL ?? DEEPSEEK_DEFAULT.baseURL,
-						apiKeyEnv: ds.apiKeyEnv ?? "DEEPSEEK_API_KEY",
-						models: (ds.models ?? []).map((m) => ({
+					const envelope = await (await fetch("/api/visionPlus.settings")).json();
+					const settings = envelope.result?.ok === false ? void 0 : envelope.result?.value;
+					if (settings === void 0) {
+						setMessage("载入失败：" + (envelope.result?.error?.message ?? "设置接口不可用"));
+						setLoaded(true);
+						return;
+					}
+					setDeepseek({
+						displayName: "DeepSeek",
+						baseURL: settings.text.baseURL || "https://api.deepseek.com",
+						apiKeyEnv: settings.text.apiKeyEnv || "DEEPSEEK_API_KEY",
+						models: (settings.text.models ?? []).map((m) => ({
 							id: m.id,
 							name: m.name ?? m.id,
 							contextWindow: m.contextWindow,
@@ -786,22 +787,18 @@ window.__ModuleLoader__.load({
 						}))
 					});
 					setDeletedRoutes(/* @__PURE__ */ new Set());
-					const drafts = [];
-					for (const [route, provider] of Object.entries(providers)) {
-						if (!route.startsWith("vp-") || route === "vp-deepseek") continue;
-						drafts.push({
-							route,
-							displayName: provider.displayName ?? route,
-							baseURL: provider.baseURL ?? "",
-							apiKeyEnv: provider.apiKeyEnv ?? "",
-							models: (provider.models ?? []).map((m) => ({
-								id: m.id,
-								name: m.name ?? m.id,
-								contextWindow: m.contextWindow,
-								maxTokens: m.maxTokens
-							}))
-						});
-					}
+					const drafts = (settings.visionModels ?? []).map((vm) => ({
+						id: vm.id,
+						displayName: vm.displayName,
+						baseURL: vm.baseURL,
+						apiKeyEnv: vm.apiKeyEnv,
+						models: (vm.models ?? []).map((m) => ({
+							id: m.id,
+							name: m.name ?? m.id,
+							contextWindow: m.contextWindow,
+							maxTokens: m.maxTokens
+						}))
+					}));
 					setModels(drafts);
 					const refs = ["DEEPSEEK_API_KEY", ...drafts.map((item) => item.apiKeyEnv)].filter(Boolean);
 					if (refs.length > 0) {
@@ -849,7 +846,6 @@ window.__ModuleLoader__.load({
 							payload: { route }
 						})
 					});
-					if (response.status === 404) return await degradedTest(route);
 					const result = (await response.json()).result;
 					if (result === void 0) throw new Error(`测试通道不可用（HTTP ${response.status}）`);
 					if (result.ok !== true) throw new Error(result.error?.message ?? "测试通道返回错误");
@@ -858,44 +854,7 @@ window.__ModuleLoader__.load({
 						reason: "空结果"
 					};
 				} catch (error) {
-					if (error instanceof Error && error.message.includes("测试通道不可用")) return await degradedTest(route);
 					throw error;
-				}
-			};
-			/** 降级探测：官方 llm.discoverModels（接口连通 + 密钥有效性；不验证视觉能力） */
-			const degradedTest = async (route) => {
-				const baseURL = route === "vp-deepseek" ? deepseek.baseURL.trim() : (models.find((m) => m.route === route)?.baseURL ?? "").trim();
-				if (!/^https?:\/\//i.test(baseURL)) return {
-					ok: false,
-					reason: "API 地址不合法（需以 http(s):// 开头）"
-				};
-				try {
-					const res = unwrap(await api.llm.discoverModels({
-						settingsNs: "llm-pi-ai",
-						provider: route,
-						baseURL,
-						api: "openai-completions"
-					}));
-					if (res.ok === false) {
-						const reason = (res.error?.message ?? "未知错误").replace(/\s+/g, " ").trim();
-						return {
-							ok: false,
-							reason: reason.length > 140 ? `${reason.slice(0, 140)}…` : reason,
-							degraded: true
-						};
-					}
-					return {
-						ok: true,
-						reply: "接口连通，密钥有效（列表探测）",
-						degraded: true
-					};
-				} catch (error) {
-					const reason = String(error).replace(/\s+/g, " ").trim();
-					return {
-						ok: false,
-						reason: reason.length > 140 ? `${reason.slice(0, 140)}…` : reason,
-						degraded: true
-					};
 				}
 			};
 			/** 测试 DeepSeek 主模型：参数校验 → 官方对接方式真实请求 */
@@ -938,7 +897,7 @@ window.__ModuleLoader__.load({
 			const testPlatform = async (index) => {
 				const item = models[index];
 				if (item === void 0) return;
-				setTesting(item.route);
+				setTesting(item.id);
 				try {
 					if (configured[item.apiKeyEnv] !== true) {
 						showToast("err", `❌ 测试失败：API 密钥未配置（${item.apiKeyEnv}）`);
@@ -952,7 +911,7 @@ window.__ModuleLoader__.load({
 						showToast("err", "❌ 测试失败：模型目录里没有有效的模型 ID");
 						return;
 					}
-					const official = PLATFORM_DEFAULTS[item.route];
+					const official = PLATFORM_DEFAULTS[item.id];
 					if (official !== void 0) for (const m of item.models) {
 						const off = official.find((o) => o.id === m.id);
 						if (off === void 0) continue;
@@ -965,12 +924,12 @@ window.__ModuleLoader__.load({
 							return;
 						}
 					}
-					const result = await callVisionTest(item.route);
+					const result = await callVisionTest(`vp-vision-${index}`);
 					if (!result.ok) {
 						showToast("err", `❌ 测试失败：${result.reason ?? "未知原因"}`);
 						return;
 					}
-					showToast("ok", result.degraded === true ? `✅ ${item.displayName || "该平台"} 测试成功：${result.reply ?? "OK"}` : `✅ ${item.displayName || "该平台"} 测试成功：OK`);
+					showToast("ok", `✅ ${item.displayName || "该平台"} 测试成功：OK`);
 				} catch (error) {
 					const reason = String(error).replace(/\s+/g, " ").trim();
 					showToast("err", `❌ 测试失败：${reason.length > 140 ? `${reason.slice(0, 140)}…` : reason}`);
@@ -985,24 +944,39 @@ window.__ModuleLoader__.load({
 				setBusy(true);
 				setMessage("");
 				try {
-					const providers = ((unwrap(await api.settings.describe({})).value?.namespaces?.find((n) => n.ns === "llm-pi-ai"))?.value)?.providers ?? {};
-					const finalProviders = {};
-					for (const [route, value] of Object.entries(providers)) {
-						if (route === target.route) continue;
-						finalProviders[route] = value;
-					}
-					const r = unwrap(await api.settings.mutate({
-						ns: "llm-pi-ai",
-						ops: [{
-							op: "set",
-							path: ["providers"],
-							value: finalProviders
-						}]
-					}));
-					if (r.ok === false) throw new Error(r.error?.message ?? "删除失败");
+					const settings = {
+						text: {
+							baseURL: deepseek.baseURL,
+							apiKeyEnv: deepseek.apiKeyEnv || "DEEPSEEK_API_KEY",
+							models: deepseek.models.map((m) => ({
+								id: m.id,
+								name: m.name,
+								contextWindow: m.contextWindow,
+								maxTokens: m.maxTokens
+							}))
+						},
+						visionModels: models.filter((item) => item.id !== target.id).map((item) => ({
+							id: item.id,
+							displayName: item.displayName,
+							baseURL: item.baseURL,
+							apiKeyEnv: item.apiKeyEnv,
+							models: item.models.map((m) => ({
+								id: m.id,
+								name: m.name,
+								contextWindow: m.contextWindow,
+								maxTokens: m.maxTokens
+							}))
+						}))
+					};
+					const envelope = await (await fetch("/api/visionPlus.settings", {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ settings })
+					})).json();
+					if (envelope.result?.ok === false) throw new Error(envelope.result.error?.message ?? "删除失败");
 					setModels((prev) => prev.filter((_, i) => i !== index));
-					setDeletedRoutes((current) => new Set(current).add(target.route));
-					if (openId === target.route) setOpenId(null);
+					setDeletedRoutes((current) => new Set(current).add(target.id));
+					if (openId === target.id) setOpenId(null);
 					setMessage("✅ 已删除并保存");
 				} catch (error) {
 					const reason = String(error).replace(/\s+/g, " ").trim();
@@ -1014,39 +988,26 @@ window.__ModuleLoader__.load({
 			const addTemplate = (template) => {
 				const draft = template.draft;
 				if (template.platformId !== void 0) {
-					const route = `vp-${template.platformId}`;
-					if (models.some((m) => m.route === route)) return;
+					const id = template.platformId;
+					if (models.some((m) => m.id === id)) return;
 					setModels((prev) => [...prev, {
 						...draft,
-						route,
+						id,
 						models: draft.models.map((m) => ({ ...m }))
 					}]);
-					setOpenId(route);
+					setOpenId(id);
 					return;
 				}
 				const suffix = Date.now().toString(36);
 				const apiKeyEnv = draft.apiKeyEnv.trim() !== "" ? draft.apiKeyEnv : `VP_${suffix.toUpperCase()}_API_KEY`;
 				const fresh = {
 					...draft,
-					route: `vp-${suffix}`,
+					id: `vp-${suffix}`,
 					apiKeyEnv
 				};
 				setModels((prev) => [...prev, fresh]);
-				setOpenId(fresh.route);
+				setOpenId(fresh.id);
 			};
-			const providerValue = (draft, imageCapable) => ({
-				displayName: draft.displayName,
-				api: "openai-completions",
-				baseURL: draft.baseURL,
-				apiKeyEnv: draft.apiKeyEnv,
-				models: draft.models.map((m) => ({
-					id: m.id,
-					name: m.name,
-					input: imageCapable ? ["text", "image"] : ["text"],
-					...m.contextWindow === void 0 ? {} : { contextWindow: m.contextWindow },
-					...m.maxTokens === void 0 ? {} : { maxTokens: m.maxTokens }
-				}))
-			});
 			const save = async () => {
 				setBusy(true);
 				setMessage("");
@@ -1060,7 +1021,7 @@ window.__ModuleLoader__.load({
 						if (r.ok === false) throw new Error(r.error?.message ?? "写入 DeepSeek 密钥失败");
 					}
 					for (const item of models) {
-						const key = (modelKeys[item.route] ?? "").trim();
+						const key = (modelKeys[item.id] ?? "").trim();
 						if (key.length > 0 && item.apiKeyEnv) {
 							const r = unwrap(await api.credentials.set({
 								ref: item.apiKeyEnv,
@@ -1069,32 +1030,43 @@ window.__ModuleLoader__.load({
 							if (r.ok === false) throw new Error(r.error?.message ?? `写入 ${item.displayName} 密钥失败`);
 						}
 					}
-					const providers = ((unwrap(await api.settings.describe({})).value?.namespaces?.find((n) => n.ns === "llm-pi-ai"))?.value)?.providers ?? {};
-					const finalProviders = {};
-					for (const [route, value] of Object.entries(providers)) if (!route.startsWith("vp-")) finalProviders[route] = value;
-					finalProviders["vp-deepseek"] = providerValue(deepseek, false);
-					for (const item of models) {
-						const modelName = (item.models[0]?.name ?? "").trim();
-						const synced = item.displayName === "自定义平台" && modelName !== "" ? {
-							...item,
-							displayName: modelName
-						} : item;
-						finalProviders[item.route] = providerValue(synced, true);
-					}
-					for (const [route, value] of Object.entries(providers)) {
-						if (!route.startsWith("vp-") || route === "vp-deepseek") continue;
-						if (deletedRoutes.has(route)) continue;
-						if (!(route in finalProviders)) finalProviders[route] = value;
-					}
-					const r = unwrap(await api.settings.mutate({
-						ns: "llm-pi-ai",
-						ops: [{
-							op: "set",
-							path: ["providers"],
-							value: finalProviders
-						}]
-					}));
-					if (r.ok === false) throw new Error(r.error?.message ?? "保存设置失败");
+					const settings = {
+						text: {
+							baseURL: deepseek.baseURL,
+							apiKeyEnv: deepseek.apiKeyEnv || "DEEPSEEK_API_KEY",
+							models: deepseek.models.map((m) => ({
+								id: m.id,
+								name: m.name,
+								contextWindow: m.contextWindow,
+								maxTokens: m.maxTokens
+							}))
+						},
+						visionModels: models.map((item) => {
+							const modelName = (item.models[0]?.name ?? "").trim();
+							const synced = item.displayName === "自定义平台" && modelName !== "" ? {
+								...item,
+								displayName: modelName
+							} : item;
+							return {
+								id: synced.id,
+								displayName: synced.displayName,
+								baseURL: synced.baseURL,
+								apiKeyEnv: synced.apiKeyEnv,
+								models: synced.models.map((m) => ({
+									id: m.id,
+									name: m.name,
+									contextWindow: m.contextWindow,
+									maxTokens: m.maxTokens
+								}))
+							};
+						})
+					};
+					const envelope = await (await fetch("/api/visionPlus.settings", {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ settings })
+					})).json();
+					if (envelope.result?.ok === false) throw new Error(envelope.result.error?.message ?? "保存设置失败");
 					setModels((prev) => prev.map((m) => {
 						const modelName = (m.models[0]?.name ?? "").trim();
 						return m.displayName === "自定义平台" && modelName !== "" ? {
@@ -1241,7 +1213,7 @@ window.__ModuleLoader__.load({
 										gap: "12px"
 									},
 									children: [models.map((item, index) => {
-										const open = openId === item.route;
+										const open = openId === item.id;
 										return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 											style: S.rowCard,
 											children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
@@ -1260,7 +1232,7 @@ window.__ModuleLoader__.load({
 															cursor: "pointer",
 															minWidth: 0
 														},
-														onClick: () => setOpenId(open ? null : item.route),
+														onClick: () => setOpenId(open ? null : item.id),
 														children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(Chevron, { open }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 															style: S.rowName,
 															children: item.displayName || `模型 ${index + 1}`
@@ -1290,7 +1262,7 @@ window.__ModuleLoader__.load({
 														style: S.rowEditButton,
 														disabled: testing !== null,
 														onClick: () => void testPlatform(index),
-														children: testing === item.route ? "测试中…" : "测试"
+														children: testing === item.id ? "测试中…" : "测试"
 													}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 														type: "button",
 														style: S.iconButton,
@@ -1306,10 +1278,10 @@ window.__ModuleLoader__.load({
 													name: item.displayName,
 													hideTitle: true,
 													keyRef: item.apiKeyEnv,
-													keyValue: modelKeys[item.route] ?? "",
+													keyValue: modelKeys[item.id] ?? "",
 													onKeyChange: (value) => setModelKeys((prev) => ({
 														...prev,
-														[item.route]: value
+														[item.id]: value
 													})),
 													configured: configured[item.apiKeyEnv] === true,
 													custom: {
@@ -1319,7 +1291,7 @@ window.__ModuleLoader__.load({
 													},
 													onCustomChange: (patch) => updateModel(index, patch),
 													models: item.models,
-													defaults: PLATFORM_DEFAULTS[item.route] ?? [],
+													defaults: PLATFORM_DEFAULTS[item.id] ?? [],
 													onModelUpdate: (mi, patch) => setModels((prev) => prev.map((p, i) => i === index ? {
 														...p,
 														models: p.models.map((m, j) => j === mi ? {
@@ -1341,11 +1313,11 @@ window.__ModuleLoader__.load({
 													} : p)),
 													onModelReset: () => setModels((prev) => prev.map((p, i) => i === index ? {
 														...p,
-														models: (PLATFORM_DEFAULTS[item.route] ?? []).map((m) => ({ ...m }))
+														models: (PLATFORM_DEFAULTS[item.id] ?? []).map((m) => ({ ...m }))
 													} : p))
 												})
 											})]
-										}, item.route);
+										}, item.id);
 									}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 										style: {
 											display: "flex",
@@ -1353,7 +1325,7 @@ window.__ModuleLoader__.load({
 											gap: "10px"
 										},
 										children: TEMPLATES.map((template) => {
-											const added = template.platformId !== void 0 && models.some((m) => m.route === `vp-${template.platformId}`);
+											const added = template.platformId !== void 0 && models.some((m) => m.id === `vp-${template.platformId}`);
 											return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
 												type: "button",
 												style: added ? {
@@ -1443,13 +1415,17 @@ window.__ModuleLoader__.load({
 			try {
 				const slots = ctx.slots;
 				const api = ctx.connection.api;
-				if (ctx.slots.getVersion?.("settings.models.extra") === void 0) throw new Error("[dsh-visionplus] 增强补丁未应用：模型页槽 settings.models.extra 不存在。请重新安装插件（安装脚本会自动应用补丁），或手动执行插件内 patches\\增强补丁.bat");
-				slots.inject("settings.models.extra", () => slots.register({
-					name: "settings.models.extra",
-					id: "vision-plus-card",
-					order: 10,
-					inject: () => ({ api })
-				}, VisionSettingsPage));
+				try {
+					slots.inject("settings.section", () => slots.register({
+						name: "settings.section",
+						id: "vision-plus",
+						order: 20,
+						label: () => "DeepSeek VisionPlus",
+						inject: () => ({ api })
+					}, VisionSettingsPage));
+				} catch (error) {
+					console.error("[vision-plus] 设置卡片注册失败:", error);
+				}
 				slots.inject("conversation.input.left", () => slots.register({
 					name: "conversation.input.left",
 					id: "vision-plus-image",

@@ -5,7 +5,9 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { PiAiProviderProfile } from '@deepseek-ai/dsh-llm-pi-ai'
 import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-system-prompt'
-import { settingsNamespace } from '@deepseek-ai/dsh-settings'
+// 类型增强：ctx.settings（设置服务）与 ctx.webServer（路由注册）
+import { installSettingsSection } from '@deepseek-ai/dsh-settings'
+import type {} from '@deepseek-ai/dsh-settings'
 import { Config } from './config.js'
 import type { VisionPlusConfig } from './config.js'
 import { VisionRouterAdapter } from './adapter.js'
@@ -13,29 +15,50 @@ import { VisionPool } from './pool.js'
 import type { PoolEntry } from './pool.js'
 import { StatusTracker } from './status.js'
 import { hasPendingImage } from './detect.js'
-import { DEFAULT_VISION_MODELS } from './settings-schema.js'
+import { DEFAULT_VISION_MODELS, DEEPSEEK_MODELS_DEFAULT, settingsSchema } from './settings-schema.js'
+import type { VisionPlusSettings } from './settings-schema.js'
+import type { IncomingMessage, ServerResponse } from 'node:http'
 
 
 export const name = 'vision-plus'
 
-export const inject = ['llm', 'credentials', 'attachments', 'settings']
+export const inject = ['llm', 'credentials', 'attachments', 'settings', 'agentDefaultModel', 'webServer']
 
-/** 视觉线路存放在官方 llm-pi-ai 命名空间（Web 客户端唯一可读写模型配置的通道）。 */
-const PI_NS = settingsNamespace('llm-pi-ai')
+/** 设置存放在插件自有命名空间 vision-plus（零补丁：不借用 llm-pi-ai，内部线路不进模型选择器）。 */
+const NS = 'vision-plus' as never
 
-const TEXT_BASE_URL = 'https://api.deepseek.com'
-
-interface PiSection {
-  providers?: Record<string, unknown>
-}
-
-function buildProviders(piProviders: Record<string, unknown> | undefined): Record<string, PiAiProviderProfile> {
+/** 文本后端（DeepSeek）与视觉池线路转成 pi-ai 内部 profile（只供本插件调用，不注册进宿主目录）。 */
+function buildProfiles(settings: VisionPlusSettings): Record<string, PiAiProviderProfile> {
   const providers: Record<string, PiAiProviderProfile> = {}
-  for (const [route, profile] of Object.entries(piProviders ?? {})) {
-    if (route.startsWith('vp-')) {
-      providers[route] = profile as PiAiProviderProfile
-    }
+  const textModels = settings.text.models.length > 0 ? settings.text.models : DEEPSEEK_MODELS_DEFAULT
+  providers['vp-deepseek'] = {
+    displayName: 'DeepSeek',
+    api: 'openai-completions',
+    baseURL: settings.text.baseURL || 'https://api.deepseek.com',
+    apiKeyEnv: settings.text.apiKeyEnv || 'DEEPSEEK_API_KEY',
+    models: textModels.map(m => ({
+      id: m.id,
+      name: m.name ?? m.id,
+      input: ['text'] as const,
+      ...(m.contextWindow === undefined ? {} : { contextWindow: m.contextWindow }),
+      ...(m.maxTokens === undefined ? {} : { maxTokens: m.maxTokens }),
+    })),
   }
+  settings.visionModels.forEach((vm, index) => {
+    providers[`vp-vision-${index}`] = {
+      displayName: vm.displayName,
+      api: 'openai-completions',
+      baseURL: vm.baseURL,
+      apiKeyEnv: vm.apiKeyEnv,
+      models: vm.models.map(m => ({
+        id: m.id,
+        name: m.name ?? m.id,
+        input: ['text', 'image'] as const,
+        ...(m.contextWindow === undefined ? {} : { contextWindow: m.contextWindow }),
+        ...(m.maxTokens === undefined ? {} : { maxTokens: m.maxTokens }),
+      })),
+    }
+  })
   return providers
 }
 
@@ -49,140 +72,168 @@ function buildProviders(piProviders: Record<string, unknown> | undefined): Recor
 export function apply(ctx: Context, config: unknown): void {
   const cfg = Config.parse(config ?? {}) as VisionPlusConfig
 
-  // 0) 专用测试通道（第 8 个补丁）：apiproxy 的 visionPlus.test RPC 会取本服务。
+  // 0) 专用测试通道（零补丁）：插件用官方 webServer 服务自挂 HTTP 接口，
   //     测试按官方对接方式真实发起：chat/completions + Bearer + 官方参数（视觉带测试图）。
-  ctx.provide?.('vision-plus-test', {
-    test: (input: { route: string }) => runVisionTest(ctx, input.route),
-  })
+  interface WebServerFace {
+    register: (route: { kind: 'exact', path: string, handler: (req: IncomingMessage, res: ServerResponse) => void | Promise<void> }) => () => void
+  }
+  const webServer = (ctx as unknown as { webServer?: WebServerFace }).webServer
+  if (webServer === undefined) {
+    ctx.logger.warn('vision-plus: webServer 服务不可用，测试通道不可用')
+  } else {
+    webServer.register({
+    kind: 'exact',
+    path: '/api/visionPlus.test',
+    handler: async (req, res) => {
+      let responseSent = false
+      const respond = (status: number, body: unknown): void => {
+        if (responseSent) return
+        responseSent = true
+        res.writeHead(status, { 'content-type': 'application/json' })
+        res.end(JSON.stringify(body))
+      }
+      try {
+        let raw = ''
+        for await (const chunk of req) raw += chunk as string
+        const parsed = JSON.parse(raw) as { rpcId?: string, payload?: { route?: string } }
+        const route = parsed.payload?.route
+        if (route === undefined || route.length === 0) {
+          respond(200, { type: 'server-response', rpcId: parsed.rpcId ?? '', result: { ok: true, value: { ok: false, reason: '缺少 route 参数' } } })
+          return
+        }
+        const value = await runVisionTest(ctx, route)
+        respond(200, { type: 'server-response', rpcId: parsed.rpcId ?? '', result: { ok: true, value } })
+      } catch (error) {
+        respond(200, { type: 'server-response', rpcId: '', result: { ok: false, error: { code: 'internal', message: error instanceof Error ? error.message : String(error) } } })
+      }
+    },
+    })
+  }
 
-  // 1) 首次启动植入 llm-pi-ai 设置（vp-deepseek 文本后端 + 保留用户已有平台）。
-  //    llm-pi-ai 的命名空间可能在本插件之后才注册（加载顺序竞态），
-  //    所以做成"重试式"：未注册/写入失败时不报错，等 2 秒再试（最多 15 次）。
-  let implantAttempts = 0
-  const runImplant = (): void => {
-    if (implantAttempts >= 15) return
-    implantAttempts += 1
+  // 1) 设置命名空间注册（自有 vision-plus）+ 旧配置迁移 + 自挂设置读写接口。
+  const defaults = (): VisionPlusSettings => ({
+    text: { baseURL: 'https://api.deepseek.com', apiKeyEnv: 'DEEPSEEK_API_KEY', models: DEEPSEEK_MODELS_DEFAULT.map(m => ({ ...m })) },
+    visionModels: [],
+  })
+  let sourceThunk: () => VisionPlusSettings = () => defaults()
+  installSettingsSection(ctx, NS, settingsSchema, defaults(), {
+    setSource: (thunk) => { sourceThunk = thunk },
+    onChange: () => {},
+  })
+  const readSettings = (): VisionPlusSettings => {
+    try { return sourceThunk() } catch { return defaults() }
+  }
+
+  // 旧配置迁移：llm-pi-ai 里的 vp-* 线路 → 自有命名空间（仅一次；成功或无需迁移即停）
+  let migrateAttempts = 0
+  const migrateLegacy = (): void => {
+    if (migrateAttempts >= 15) return
+    migrateAttempts += 1
     try {
-      const section = ctx.settings.get(PI_NS) as PiSection | undefined
-      const providers = section?.providers ?? {}
-      // 构建期望的 providers（迁移 + 排序），整体一次性 set
-      const finalProviders: Record<string, unknown> = {}
-      finalProviders['vp-deepseek'] = providers['vp-deepseek'] ?? {
-        displayName: 'DeepSeek',
-        api: 'openai-completions',
-        baseURL: TEXT_BASE_URL,
-        apiKeyEnv: 'DEEPSEEK_API_KEY',
-        models: [
-          { id: 'deepseek-v4-pro', name: 'DeepSeek-V4-Pro', input: ['text'], contextWindow: 1048576 },
-          { id: 'deepseek-v4-flash', name: 'DeepSeek-V4-Flash', input: ['text'], contextWindow: 1048576 },
-        ],
+      const legacy = ctx.settings.get('llm-pi-ai' as never) as { providers?: Record<string, unknown> } | undefined
+      const providers = legacy?.providers ?? {}
+      const vpRoutes = Object.keys(providers).filter(route => route.startsWith('vp-') && route !== 'vp-deepseek')
+      const current = readSettings()
+      if (vpRoutes.length === 0 || current.visionModels.length > 0) {
+        migrateAttempts = 15
+        return
       }
-      // 迁移：旧单模型线路 vp-glm46v 并入 vp-glm 平台
-      const legacy = providers['vp-glm46v']
-      const glmCurrent = providers['vp-glm']
-      if (legacy !== undefined && glmCurrent !== undefined) {
-        const legacyModels = ((legacy as { models?: Array<{ id?: string }> }).models ?? []).filter(m => typeof m?.id === 'string')
-        const glmModels = [...((glmCurrent as { models?: Array<{ id?: string }> }).models ?? [])]
-        for (const m of legacyModels) {
-          if (!glmModels.some(x => x?.id === m.id)) glmModels.push(m)
+      const visionModels: VisionPlusSettings['visionModels'] = vpRoutes.map((route, index) => {
+        const raw = providers[route] as {
+          displayName?: string
+          baseURL?: string
+          apiKeyEnv?: string
+          models?: Array<{ id?: string, name?: string, contextWindow?: number, maxTokens?: number }>
         }
-        finalProviders['vp-glm'] = { ...(glmCurrent as object), models: glmModels }
-      } else if (legacy !== undefined) {
-        finalProviders['vp-glm'] = legacy
-      } else if (glmCurrent !== undefined) {
-        finalProviders['vp-glm'] = glmCurrent
-      }
-      // 视觉平台：只保留用户已有的（绝不自动添加缺失的预置平台）。
-      // 预置平台只是"可添加的模板"，用户添加保存了什么，配置里才有什么。
-      for (const model of DEFAULT_VISION_MODELS) {
-        const route = `vp-${model.id}`
-        if (providers[route] !== undefined && !(route in finalProviders)) finalProviders[route] = providers[route]
-      }
-      // 用户自定义平台（模板之外、非迁移源）追加在末尾
-      const templateRoutes = new Set(DEFAULT_VISION_MODELS.map(model => `vp-${model.id}`))
-      for (const [route, value] of Object.entries(providers)) {
-        if (route.startsWith('vp-') && route !== 'vp-deepseek' && route !== 'vp-glm46v' && !templateRoutes.has(route) && !(route in finalProviders)) {
-          finalProviders[route] = value
+        return {
+          id: `vp-${index}`,
+          displayName: raw.displayName ?? route,
+          baseURL: raw.baseURL ?? '',
+          apiKeyEnv: raw.apiKeyEnv ?? '',
+          models: (raw.models ?? []).filter(m => typeof m?.id === 'string' && m.id.length > 0).map(m => ({
+            id: m.id as string,
+            name: m.name ?? m.id,
+            ...(m.contextWindow === undefined ? {} : { contextWindow: m.contextWindow }),
+            ...(m.maxTokens === undefined ? {} : { maxTokens: m.maxTokens }),
+          })),
         }
+      })
+      const textModels: VisionPlusSettings['text']['models'] = ((providers['vp-deepseek'] as { models?: Array<{ id?: string, name?: string, contextWindow?: number }> } | undefined)?.models ?? DEEPSEEK_MODELS_DEFAULT)
+        .filter(m => typeof m?.id === 'string')
+        .map(m => ({ id: m.id as string, name: m.name ?? m.id, ...(m.contextWindow === undefined ? {} : { contextWindow: m.contextWindow }) }))
+      const migrated: VisionPlusSettings = {
+        text: { baseURL: 'https://api.deepseek.com', apiKeyEnv: 'DEEPSEEK_API_KEY', models: textModels },
+        visionModels,
       }
-      // 规格升级：旧默认值 → 权威官方值（仅当值仍是旧默认或缺失时升级，不覆盖用户手动改过的值）
-      const SPEC_UPGRADES: Record<string, Record<string, { contextWindow?: { from?: number, to: number }, maxTokens?: { from?: number, to: number } }>> = {
-        'vp-deepseek': {
-          'deepseek-v4-pro': { contextWindow: { from: 1000000, to: 1048576 } },
-          'deepseek-v4-flash': { contextWindow: { from: 1000000, to: 1048576 } },
-        },
-        'vp-glm': {
-          'glm-4.1v-thinking-flash': { contextWindow: { from: 128000, to: 65536 }, maxTokens: { to: 16384 } },
-          'glm-4.6v-flash': { contextWindow: { from: 128000, to: 131072 }, maxTokens: { to: 32768 } },
-        },
-        'vp-siliconflow': {
-          'Qwen/Qwen3-VL-8B-Instruct': { maxTokens: { to: 16384 } },
-        },
-      }
-      // 提供方显示名升级：旧默认名 → 官方名称（仅当仍是旧默认名时替换）
-      const DISPLAYNAME_UPGRADES: Record<string, { from: string[], to: string }> = {
-        'vp-glm': { from: ['GLM-4.1V-Thinking-Flash（免费）'], to: '智谱（GLM）' },
-        'vp-siliconflow': { from: ['SiliconFlow Qwen3-VL-8B（免费）', 'SiliconFlow（硅基流动）'], to: 'Qwen（千问）' },
-      }
-      for (const [route, upgrade] of Object.entries(DISPLAYNAME_UPGRADES)) {
-        const provider = finalProviders[route]
-        if (provider === undefined) continue
-        if (upgrade.from.includes((provider as { displayName?: string }).displayName ?? '')) {
-          finalProviders[route] = { ...(provider as object), displayName: upgrade.to }
+      void ctx.settings.replace(NS, migrated).then(() => {
+        // 清掉 llm-pi-ai 里的 vp-*（保留非 vp-* 提供方）
+        const remaining: Record<string, unknown> = {}
+        for (const [route, value] of Object.entries(providers)) {
+          if (!route.startsWith('vp-')) remaining[route] = value
         }
-      }
-      for (const [route, upgrades] of Object.entries(SPEC_UPGRADES)) {
-        const provider = finalProviders[route]
-        if (provider === undefined) continue
-        const models = ((provider as { models?: Array<Record<string, unknown>> }).models ?? []).map(m => ({ ...m }))
-        let changed = false
-        for (const m of models) {
-          const upgrade = upgrades[String(m.id ?? '')]
-          if (upgrade === undefined) continue
-          const cw = upgrade.contextWindow
-          if (cw !== undefined) {
-            const cur = m.contextWindow
-            if ((typeof cur !== 'number' && cw.from === undefined) || cur === cw.from) {
-              m.contextWindow = cw.to
-              changed = true
-            }
-          }
-          const mt = upgrade.maxTokens
-          if (mt !== undefined) {
-            const cur = m.maxTokens
-            if ((typeof cur !== 'number' && mt.from === undefined) || cur === mt.from) {
-              m.maxTokens = mt.to
-              changed = true
-            }
-          }
-        }
-        if (changed) finalProviders[route] = { ...(provider as object), models }
-      }
-      if (JSON.stringify(providers) !== JSON.stringify(finalProviders)) {
-        void ctx.settings.mutate(PI_NS, [{ op: 'set', path: ['providers'], value: finalProviders }])
-          .then(() => {
-            implantAttempts = 15 // 成功，不再重试
-          })
-          .catch(() => {
-            // llm-pi-ai 尚未注册（或写入失败）：稍后重试，绝不把未处理拒绝抛给进程
-            setTimeout(runImplant, 2000)
-          })
-      } else {
-        implantAttempts = 15 // 无需变更，停止
-      }
+        void ctx.settings.replace('llm-pi-ai' as never, { providers: remaining }).catch(() => { /* 忽略 */ })
+        migrateAttempts = 15
+      }).catch(() => {
+        // 未注册/写入失败：稍后重试
+        setTimeout(migrateLegacy, 2000)
+      })
     } catch {
-      // get 抛错（未注册）等情况：稍后重试
-      setTimeout(runImplant, 2000)
+      setTimeout(migrateLegacy, 2000)
     }
   }
-  runImplant()
+  migrateLegacy()
 
-  // 2) 内部适配器：每次请求按当前 llm-pi-ai 设置解析（保存后实时生效）。
+  // 自挂设置读写接口（零补丁；浏览器端设置页通过本接口读写）
+  if (webServer !== undefined) {
+    webServer.register({
+      kind: 'exact',
+      path: '/api/visionPlus.settings',
+      handler: async (req, res) => {
+        let sent = false
+        const respond = (body: unknown): void => {
+          if (sent) return
+          sent = true
+          res.writeHead(200, { 'content-type': 'application/json' })
+          res.end(JSON.stringify(body))
+        }
+        try {
+          if ((req.method ?? 'GET').toUpperCase() === 'GET') {
+            respond({ type: 'server-response', rpcId: '', result: { ok: true, value: readSettings() } })
+            return
+          }
+          let raw = ''
+          for await (const chunk of req) raw += chunk as string
+          const parsed = JSON.parse(raw) as { settings?: VisionPlusSettings }
+          const next = parsed.settings
+          if (next === undefined) {
+            respond({ type: 'server-response', rpcId: '', result: { ok: false, error: { code: 'bad-request', message: '缺少 settings 参数' } } })
+            return
+          }
+          await ctx.settings.replace(NS, next)
+          respond({ type: 'server-response', rpcId: '', result: { ok: true, value: readSettings() } })
+        } catch (error) {
+          respond({ type: 'server-response', rpcId: '', result: { ok: false, error: { code: 'internal', message: error instanceof Error ? error.message : String(error) } } })
+        }
+      },
+    })
+  }
+
+  // 1.5) 会话级切换（零补丁）：运行时接管 agentDefaultModel.saveSelection。
+  //      该方法的唯一调用方是 session.selectModel（已核实），吞掉 = "切换只影响当前会话"。
+  try {
+    const defaultModelService = ctx.get('agentDefaultModel') as unknown as { saveSelection: (next: unknown) => Promise<void> } | undefined
+    if (defaultModelService !== undefined && typeof defaultModelService.saveSelection === 'function') {
+      defaultModelService.saveSelection = async () => {
+        // 会话级切换：不写全局默认模型
+      }
+    }
+  } catch {
+    ctx.logger.warn('vision-plus: agentDefaultModel 服务不可用，会话级切换回退为官方行为')
+  }
+
+  // 2) 内部适配器：每次请求按当前设置解析（保存后实时生效）。
   const inner = new PiAiAdapter({
-    profiles: () => {
-      const section = ctx.settings.get(PI_NS) as PiSection | undefined
-      return resolveProfiles(buildProviders(section?.providers))
-    },
+    profiles: () => resolveProfiles(buildProfiles(readSettings())),
     resolveApiKey: async (_provider, profile) => {
       const ref = profile.apiKeyEnv
       if (typeof ref !== 'string' || ref.length === 0) return undefined
@@ -198,17 +249,15 @@ export function apply(ctx: Context, config: unknown): void {
 
   // 3) 视觉池 + 状态跟踪 + 注册路由。
   const poolOf = (): PoolEntry[] => {
-    const section = ctx.settings.get(PI_NS) as PiSection | undefined
-    const providers = section?.providers ?? {}
+    const settings = readSettings()
     const entries: PoolEntry[] = []
-    for (const [route, raw] of Object.entries(providers)) {
-      if (!route.startsWith('vp-') || route === 'vp-deepseek') continue
-      const profile = raw as { displayName?: string, models?: Array<{ id?: string, name?: string }> }
-      for (const m of profile.models ?? []) {
+    settings.visionModels.forEach((vm, index) => {
+      const provider = `vp-vision-${index}`
+      for (const m of vm.models) {
         if (typeof m?.id !== 'string' || m.id.length === 0) continue
-        entries.push({ id: `${route}/${m.id}`, label: m.name ?? m.id, provider: route, model: m.id })
+        entries.push({ id: `${provider}/${m.id}`, label: m.name ?? m.id, provider, model: m.id })
       }
-    }
+    })
     return entries
   }
   const pool = new VisionPool(poolOf, cfg.rateLimit)
@@ -279,9 +328,30 @@ function extractApiMessage(text: string): string {
  */
 async function runVisionTest(ctx: Context, route: string): Promise<{ ok: boolean, reply?: string, reason?: string }> {
   try {
-    const section = ctx.settings.get(PI_NS) as PiSection | undefined
-    const raw = section?.providers?.[route] as TestProviderProfile | undefined
-    if (raw === undefined) return { ok: false, reason: `未找到线路 ${route}（请先保存）` }
+    const rawSettings = (() => {
+      try { return ctx.settings.get(NS) as VisionPlusSettings | undefined } catch { return undefined }
+    })()
+    const settings = rawSettings ?? {
+      text: { baseURL: 'https://api.deepseek.com', apiKeyEnv: 'DEEPSEEK_API_KEY', models: DEEPSEEK_MODELS_DEFAULT.map(m => ({ ...m })) },
+      visionModels: [],
+    }
+    let raw: TestProviderProfile
+    if (route === 'vp-deepseek') {
+      raw = {
+        baseURL: settings.text.baseURL,
+        apiKeyEnv: settings.text.apiKeyEnv,
+        models: settings.text.models.map(m => ({ id: m.id })),
+      }
+    } else {
+      const m = /^vp-vision-(\d+)$/.exec(route)
+      const vm = m === null ? undefined : settings.visionModels[Number(m[1])]
+      if (vm === undefined) return { ok: false, reason: `未找到视觉模型 ${route}（请先保存）` }
+      raw = {
+        baseURL: vm.baseURL,
+        apiKeyEnv: vm.apiKeyEnv,
+        models: vm.models.map(item => ({ id: item.id })),
+      }
+    }
     const baseURL = (raw.baseURL ?? '').trim()
     if (!/^https?:\/\//i.test(baseURL)) return { ok: false, reason: 'API 地址不合法（需以 http(s):// 开头）' }
     const model = raw.models?.[0]?.id
@@ -311,7 +381,7 @@ async function runVisionTest(ctx: Context, route: string): Promise<{ ok: boolean
     const body = {
       model,
       messages: [{ role: 'user', content }],
-      max_tokens: isVision ? 1024 : 32,
+      max_tokens: 1024,
       stream: false,
     }
     const controller = new AbortController()

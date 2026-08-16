@@ -22,18 +22,18 @@ export function apply(ctx: Context): void {
     const slots = (ctx as Context & { slots: SlotsFace }).slots
     const api = (ctx as Context & { connection: ConnectionFace }).connection.api
 
-    // 1) 设置卡片：只挂在官方"模型"页内（settings.models.extra 槽，由安装时的增强补丁提供）。
-    //    槽缺失 = 增强补丁未应用 → 直接失败并输出原因，不做任何降级。
-    const slotsWithVersion = ctx as Context & { slots: SlotsFace & { getVersion?: (name: string) => unknown } }
-    if (slotsWithVersion.slots.getVersion?.('settings.models.extra') === undefined) {
-      throw new Error('[dsh-visionplus] 增强补丁未应用：模型页槽 settings.models.extra 不存在。请重新安装插件（安装脚本会自动应用补丁），或手动执行插件内 patches\\增强补丁.bat')
+    // 1) 设置卡片：官方自带的 settings.section 槽（零补丁），设置页出现独立栏目。
+    try {
+      slots.inject('settings.section', () => slots.register({
+        name: 'settings.section',
+        id: 'vision-plus',
+        order: 20,
+        label: () => 'DeepSeek VisionPlus',
+        inject: () => ({ api }),
+      }, VisionSettingsPage))
+    } catch (error) {
+      console.error('[vision-plus] 设置卡片注册失败:', error)
     }
-    slots.inject('settings.models.extra', () => slots.register({
-      name: 'settings.models.extra',
-      id: 'vision-plus-card',
-      order: 10,
-      inject: () => ({ api }),
-    }, VisionSettingsPage))
 
     // 2) 输入框图片图标（Codex 式，占官方 input.left 座）
     slots.inject('conversation.input.left', () => slots.register({
