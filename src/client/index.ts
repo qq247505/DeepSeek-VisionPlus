@@ -28,7 +28,7 @@ export function apply(ctx: Context): void {
         name: 'settings.section',
         id: 'vision-plus',
         order: 20,
-        label: () => 'VisionPlus',
+        label: () => '桥接视觉',
         inject: () => ({ api }),
       }, VisionSettingsPage))
     } catch (error) {

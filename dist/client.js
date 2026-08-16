@@ -1436,7 +1436,7 @@ window.__ModuleLoader__.load({
 						name: "settings.section",
 						id: "vision-plus",
 						order: 20,
-						label: () => "VisionPlus",
+						label: () => "桥接视觉",
 						inject: () => ({ api })
 					}, VisionSettingsPage));
 				} catch (error) {
