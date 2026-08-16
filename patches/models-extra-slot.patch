@@ -1,0 +1,45 @@
+diff --git a/packages/client/ui-settings-models/src/client/ModelsSection.tsx b/packages/client/ui-settings-models/src/client/ModelsSection.tsx
+index 5fe5647..b547ba2 100644
+--- a/packages/client/ui-settings-models/src/client/ModelsSection.tsx
++++ b/packages/client/ui-settings-models/src/client/ModelsSection.tsx
+@@ -168,13 +168,13 @@ export function providerCopy(template: string, target: ProviderIdentity): string
+  * @param props - slot-delivered injected dependencies.
+  * @returns the section, or null while the shell has not injected yet.
+  */
+-export function ModelsSection(props: ModelsSectionProps): ReactNode {
+-  const { controller, useSnapshot, api, t } = props
++export function ModelsSection(props: ModelsSectionProps & { renderSlot?: (key: string, owner: object) => ReactNode }): ReactNode {
++  const { controller, useSnapshot, api, t, renderSlot } = props
+   if (controller === undefined || useSnapshot === undefined || api === undefined || t === undefined) return null
+-  return <Loaded injected={{ controller, useSnapshot, api, t }} />
++  return <Loaded injected={{ controller, useSnapshot, api, t }} renderSlot={renderSlot} />
+ }
+ 
+-function Loaded({ injected }: { injected: ModelsSectionInjected }): ReactNode {
++function Loaded({ injected, renderSlot }: { injected: ModelsSectionInjected, renderSlot?: (key: string, owner: object) => ReactNode }): ReactNode {
+   const { controller, api, t } = injected
+   const state = injected.useSnapshot(snapshot => snapshot)
+   const [editing, setEditing] = useState<EditorTarget | undefined>(undefined)
+@@ -520,6 +520,7 @@ function Loaded({ injected }: { injected: ModelsSectionInjected }): ReactNode {
+       >
+         {deleteFailure === undefined ? null : <p className={styles['error']}>{deleteFailure}</p>}
+       </Modal>
++      {renderSlot?.('settings.models.extra', {})}
+     </div>
+   )
+ }
+diff --git a/packages/client/ui-settings-models/src/client/index.ts b/packages/client/ui-settings-models/src/client/index.ts
+index dc7f32e..abf8a6b 100644
+--- a/packages/client/ui-settings-models/src/client/index.ts
++++ b/packages/client/ui-settings-models/src/client/index.ts
+@@ -121,6 +121,10 @@ export function apply(ctx: ClientContext): void {
+     order: 10,
+     label: () => t('nav'),
+     inject: injected,
++    // vision-plus 扩展点：模型页末尾的第三方贡献槽
++    children: {
++      'settings.models.extra': { kind: 'list', scope: 'root' },
++    },
+   }, ModelsSection))
+   ctx.slots.inject('settings.onboarding', () => ctx.slots.register({
+     name: 'settings.onboarding',

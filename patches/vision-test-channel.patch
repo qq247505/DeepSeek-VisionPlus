@@ -1,0 +1,204 @@
+diff --git a/packages/host/apiproxy/src/api-proxy.ts b/packages/host/apiproxy/src/api-proxy.ts
+index ba19dc0..e18e637 100644
+--- a/packages/host/apiproxy/src/api-proxy.ts
++++ b/packages/host/apiproxy/src/api-proxy.ts
+@@ -3407,6 +3407,23 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
+       },
+     },
+ 
++    visionPlus: {
++      async test(request) {
++        try {
++          const service = ctx.get('vision-plus-test') as unknown as {
++            test: (input: { route: string }) => Promise<{ ok: boolean, reply?: string, reason?: string }>
++          }
++          return ok(request, await service.test(request.payload))
++        } catch (error: unknown) {
++          return err(request, {
++            code: 'internal',
++            message: error instanceof Error ? error.message : String(error),
++            details: {},
++          })
++        }
++      },
++    },
++
+     events: {
+       mux(_request, signal) {
+         const queue = new FrameQueue<RpcRequest<MuxFrame>>()
+diff --git a/packages/host/apiproxy/src/api/index.ts b/packages/host/apiproxy/src/api/index.ts
+index b5e1d1f..404720f 100644
+--- a/packages/host/apiproxy/src/api/index.ts
++++ b/packages/host/apiproxy/src/api/index.ts
+@@ -15,6 +15,8 @@ import type { GoalsApi } from './goals.ts'
+ import type { SettingsApi } from './settings.ts'
+ import type { CredentialsApi } from './credentials.ts'
+ import type { LlmApi } from './llm.ts'
++import type { VisionPlusApi } from './rpc-map.ts'
++export type { VisionPlusApi, VisionPlusTestInput, VisionPlusTestResult } from './rpc-map.ts'
+ import type { DownloadsApi } from './downloads.ts'
+ import type { ClientResponse, RpcReceipt } from './rpc.ts'
+ 
+@@ -31,6 +33,8 @@ export interface ApiProxy {
+   settings: SettingsApi
+   credentials: CredentialsApi
+   llm: LlmApi
++  /** vision-plus 插件测试通道（随插件安装的补丁） */
++  visionPlus: VisionPlusApi
+   /** Host-only download surfaces (GET, no wire envelope); absent from IApiClient. */
+   downloads: DownloadsApi
+   /**
+diff --git a/packages/host/apiproxy/src/api/rpc-map.ts b/packages/host/apiproxy/src/api/rpc-map.ts
+index 80dede1..dd2eb86 100644
+--- a/packages/host/apiproxy/src/api/rpc-map.ts
++++ b/packages/host/apiproxy/src/api/rpc-map.ts
+@@ -13,8 +13,32 @@ import type { GoalsApi } from './goals.ts'
+ import type { SettingsApi } from './settings.ts'
+ import type { CredentialsApi } from './credentials.ts'
+ import type { LlmApi } from './llm.ts'
++
++/**
++ * vision-plus 插件专用测试通道（第 8 个补丁）：
++ * 插件节点端注册 'vision-plus-test' 服务，本 RPC 把浏览器的测试请求转给它，
++ * 由插件用官方对接方式（chat/completions + 官方参数）真实发起视觉/文本测试。
++ * 类型放这里（而非新文件）以保证补丁自包含，可随插件安装一起应用。
++ */
++export interface VisionPlusTestInput {
++  /** llm-pi-ai 里的线路（vp-glm / vp-siliconflow / vp-deepseek / 自定义 vp-*）。 */
++  route: string
++}
++
++export interface VisionPlusTestResult {
++  ok: boolean
++  /** 成功时：模型对测试图的真实回复（截断） */
++  reply?: string
++  /** 失败时：具体原因 */
++  reason?: string
++}
++
++export interface VisionPlusApi {
++  test(request: RpcRequest<VisionPlusTestInput>): Promise<RpcResponse<VisionPlusTestResult>>
++}
+ import type { SubagentsApi } from './subagents.ts'
+ import type { RpcResponse } from './rpc.ts'
++import type { RpcRequest } from './rpc.ts'
+ 
+ /**
+  * Method name → method signature. Signatures are the single source of truth; payload/value
+@@ -74,6 +98,7 @@ export interface RpcMethodMap {
+   'llm.providers': LlmApi['providers']
+   'llm.models': LlmApi['models']
+   'llm.discoverModels': LlmApi['discoverModels']
++  'visionPlus.test': VisionPlusApi['test']
+ }
+ 
+ /** Business request payload of method K (reaches through the RpcRequest narrow form to payload). */
+diff --git a/packages/host/apiproxy/src/fetch/handler.ts b/packages/host/apiproxy/src/fetch/handler.ts
+index 697171e..7463bcf 100644
+--- a/packages/host/apiproxy/src/fetch/handler.ts
++++ b/packages/host/apiproxy/src/fetch/handler.ts
+@@ -7,7 +7,8 @@
+  */
+ 
+ import { randomUUID } from 'node:crypto'
+-import type { z } from 'zod'
++import { z } from 'zod'
++
+ import type { ApiProxy, MuxFrame, HostFrame } from '../api/index.ts'
+ import { sessionLogQuerySchema } from '../api/downloads.schema.ts'
+ import type { RequestPayload, ResponseValue, RpcMethodMap } from '../api/rpc-map.ts'
+@@ -87,6 +88,11 @@ type UnaryRoutes = {
+   }
+ }
+ 
++/** vision-plus 测试通道 payload 校验 */
++const visionPlusTestRequestSchema = z.object({
++  route: z.string().min(1),
++})
++
+ const UNARY_ROUTES: UnaryRoutes = {
+   'session.list': { schema: sessionListRequestSchema, invoke: (api, r) => api.sessions.list(r) },
+   'session.search': { schema: sessionSearchRequestSchema, invoke: (api, r, signal) => api.sessions.search(r, signal) },
+@@ -140,6 +146,7 @@ const UNARY_ROUTES: UnaryRoutes = {
+   'llm.providers': { schema: llmProvidersRequestSchema, invoke: (api, r) => api.llm.providers(r) },
+   'llm.models': { schema: llmModelsRequestSchema, invoke: (api, r) => api.llm.models(r) },
+   'llm.discoverModels': { schema: llmDiscoverModelsRequestSchema, invoke: (api, r, signal) => api.llm.discoverModels(r, signal) },
++  'visionPlus.test': { schema: visionPlusTestRequestSchema, invoke: (api, r) => api.visionPlus.test(r) },
+ }
+ 
+ /** Route lookup that narrows an arbitrary path segment to a map key (single cast point for the string→key refinement). */
+diff --git a/packages/host/apiproxy/src/fetch/client.ts b/packages/host/apiproxy/src/fetch/client.ts
+index 70e3ece..37bdcd0 100644
+--- a/packages/host/apiproxy/src/fetch/client.ts
++++ b/packages/host/apiproxy/src/fetch/client.ts
+@@ -5,7 +5,7 @@
+  * abstract doFetch (transport) + overridable onEnvelope (tap). ApiProxy (the impl face) is untouched.
+  */
+ 
+-import type { z } from 'zod'
++import { z } from 'zod'
+ import type { ApiProxy, HostFrame, MuxFrame } from '../api/index.ts'
+ import type { RequestPayload, ResponseValue, RpcMethodMap } from '../api/rpc-map.ts'
+ import type { ClientRequest, ClientResponse, RpcMessage, RpcReceipt, RpcRequest, RpcResponse, ServerRequest } from '../api/rpc.ts'
+@@ -161,6 +161,9 @@ export interface IApiClient {
+     models(payload: RequestPayload<'llm.models'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'llm.models'>>>
+     discoverModels(payload: RequestPayload<'llm.discoverModels'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'llm.discoverModels'>>>
+   }
++  visionPlus: {
++    test(payload: RequestPayload<'visionPlus.test'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'visionPlus.test'>>>
++  }
+   /** client-response passthrough (rpcId is a backfill of the server-request's id — never minted here). */
+   respond(message: ClientResponse, signal?: AbortSignal): Promise<RpcReceipt>
+ }
+@@ -169,6 +172,12 @@ export interface IApiClient {
+  * S→C second-level parse table: value schema by method (the response-path
+  * mirror of the handler's request table; key coverage compiler-enforced against RpcMethodMap).
+  */
++const visionPlusTestValueSchema = z.object({
++  ok: z.boolean(),
++  reply: z.string().optional(),
++  reason: z.string().optional(),
++})
++
+ const UNARY_VALUE_SCHEMAS: { [K in keyof RpcMethodMap]: z.ZodType<Wire<ResponseValue<K>>> } = {
+   'session.list': sessionListValueSchema,
+   'session.search': sessionSearchValueSchema,
+@@ -222,6 +231,7 @@ const UNARY_VALUE_SCHEMAS: { [K in keyof RpcMethodMap]: z.ZodType<Wire<ResponseV
+   'llm.providers': llmProvidersValueSchema,
+   'llm.models': llmModelsValueSchema,
+   'llm.discoverModels': llmDiscoverModelsValueSchema,
++  'visionPlus.test': visionPlusTestValueSchema,
+ }
+ 
+ /** Default timeout for bounded unary calls (rpc-compare 2026-07-19: a hung host must not leave callers pending forever). */
+@@ -500,6 +510,10 @@ export abstract class AbstractApiClient implements IApiClient {
+     discoverModels: (payload, signal) => this.callUnary('llm.discoverModels', payload, signal),
+   }
+ 
++  readonly visionPlus: IApiClient['visionPlus'] = {
++    test: (payload, signal) => this.callUnary('visionPlus.test', payload, signal),
++  }
++
+   readonly events: IApiClient['events'] = {
+     mux: (payload, signal, onOpen) => this.openMux(payload, signal, onOpen),
+     host: (payload, signal, onOpen) => this.openHost(payload, signal, onOpen),
+diff --git a/packages/host/apiproxy/src/index.ts b/packages/host/apiproxy/src/index.ts
+index ac6c770..ca866ed 100644
+--- a/packages/host/apiproxy/src/index.ts
++++ b/packages/host/apiproxy/src/index.ts
+@@ -89,6 +89,7 @@ export class ApiProxyService extends Service implements ApiProxy {
+   readonly settings: ApiProxy['settings']
+   readonly credentials: ApiProxy['credentials']
+   readonly llm: ApiProxy['llm']
++  readonly visionPlus: ApiProxy['visionPlus']
+   readonly events: ApiProxy['events']
+   readonly downloads: ApiProxy['downloads']
+   readonly respond: ApiProxy['respond']
+@@ -117,6 +118,7 @@ export class ApiProxyService extends Service implements ApiProxy {
+     this.settings = api.settings
+     this.credentials = api.credentials
+     this.llm = api.llm
++    this.visionPlus = api.visionPlus
+     this.events = api.events
+     this.downloads = api.downloads
+     // createApiProxy returns closures (no `this` capture), so the bind is

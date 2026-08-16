@@ -1,0 +1,13 @@
+diff --git a/packages/llm/token-meter/src/breakdown-projection.ts b/packages/llm/token-meter/src/breakdown-projection.ts
+index c83879c..1bb3e0f 100644
+--- a/packages/llm/token-meter/src/breakdown-projection.ts
++++ b/packages/llm/token-meter/src/breakdown-projection.ts
+@@ -61,7 +61,7 @@ ProjectionDefinition<'contextBreakdown', ContextBreakdownState> = {
+     return {
+       systemTokens,
+       toolsTokens,
+-      messageTokens: state.messageTokens + fold.deltaTokens,
++      messageTokens: Math.max(0, state.messageTokens + fold.deltaTokens),
+       ...fold.claim === undefined ? {} : { claim: fold.claim },
+     }
+   },

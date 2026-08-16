@@ -1,0 +1,26 @@
+diff --git a/packages/llm/llm-pi-ai/src/index.ts b/packages/llm/llm-pi-ai/src/index.ts
+index 2e55077..5857c4d 100644
+--- a/packages/llm/llm-pi-ai/src/index.ts
++++ b/packages/llm/llm-pi-ai/src/index.ts
+@@ -142,7 +142,11 @@ function directoryEntries(
+   for (const provider of catalog) {
+     if (catalogProviderTakesApiKey(provider)) declare(provider, provider)
+   }
+-  for (const [provider, profile] of profiles) declare(provider, profile.displayName)
++  for (const [provider, profile] of profiles) {
++    // vision-plus 插件自有的视觉线路（vp-*）由它的自定义设置页管理，不在模型页生成官方卡片
++    if (provider.startsWith('vp-')) continue
++    declare(provider, profile.displayName)
++  }
+   return [...entries.values()]
+ }
+ 
+@@ -259,7 +263,7 @@ export function apply(ctx: Context, config: Config): void {
+     // conflicting route leaves the previous routes serving requests, and
+     // `registeredFacts` only advances once the registry actually holds the
+     // new set — so returning to a working configuration always re-applies.
+-    const routes = [...profiles().keys()]
++    const routes = [...profiles().keys()].filter(route => !route.startsWith('vp-'))
+     if (registration === undefined) {
+       // Dormant bare mount: nothing is registered until a section supplies
+       // profiles, and an empty section keeps it that way.
