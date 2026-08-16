@@ -6,15 +6,8 @@
     </linearGradient>
   </defs>
   <rect x="8" y="8" width="240" height="240" rx="60" fill="url(#bg)"/>
-  <!-- 镜头外圈 -->
-  <circle cx="128" cy="128" r="66" fill="rgba(255,255,255,0.08)" stroke="#ffffff" stroke-width="11"/>
-  <!-- 镜头内圈 -->
-  <circle cx="128" cy="128" r="40" fill="none" stroke="#ffffff" stroke-width="8"/>
-  <!-- 瞳孔（视觉青） -->
-  <circle cx="128" cy="128" r="24" fill="#22d3ee"/>
-  <!-- 高光 -->
-  <circle cx="119" cy="119" r="8" fill="#ffffff"/>
-  <circle cx="139" cy="139" r="3.5" fill="#ffffff" opacity="0.8"/>
-  <!-- 右上星光 -->
-  <path d="M196 58 l5 13 13 5 -13 5 -5 13 -5 -13 -13 -5 13 -5 z" fill="#a5f3fc"/>
+  <!-- V -->
+  <path d="M62 84 L96 176 L130 84" fill="none" stroke="#ffffff" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- +（视觉青，呼应插件主题色） -->
+  <path d="M180 104 L180 152 M156 128 L204 128" fill="none" stroke="#22d3ee" stroke-width="16" stroke-linecap="round"/>
 </svg>
