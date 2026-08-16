@@ -18,7 +18,7 @@ DeepSeek 官方模型是纯文本模型，本身不能看图。DeepSeek VisionPl
 ## ✨ 特性
 
 - 👁️ **自动视觉路由**：消息中出现图片（选图 / 粘贴 / 模型自主 read_image）时自动交给视觉池，无图请求仍走 DeepSeek，推理等级（Off/High/Max）原样保留；
-- 🎨 **模型页内嵌卡片**：设置 → 模型页里的 DeepSeek VisionPlus 卡片——添加视觉模型、配置密钥、编辑模型目录（ID/名称/上下文窗口/最大输出，K/M 单位），保存实时生效；
+- 🎨 **设置卡片**：设置 → VisionPlus 独立栏目里的 DeepSeek VisionPlus 卡片——添加视觉模型、配置密钥、编辑模型目录（ID/名称/上下文窗口/最大输出，K/M 单位），保存实时生效；
 - 🔌 **输入框图片按钮**：选中视觉变体后出现，选图 / 多选 / 拖拽即发；
 - 🧪 **一键测试**：DeepSeek 与每个视觉模型都有测试按钮——先校验参数（密钥/地址/模型 ID/官方上限），再按官方对接方式真实请求，结果气泡提示 3 秒消失；
 - 🛡️ **免费额度保护**：视觉池顺序轮换 + 限频（最小间隔/每分钟上限/失败冷却），单个失败自动换下一个，全失败如实抛回 DeepSeek 自行决策；
@@ -40,7 +40,7 @@ dsh plugin --profile web add github:qq247505/DeepSeek-VisionPlus
 
 ## 🚀 快速开始
 
-1. 重启 Harness，打开 设置 → **DeepSeek VisionPlus**（独立栏目）卡片；
+1. 重启 Harness，打开 设置 → **VisionPlus**（独立栏目）卡片；
 2. DeepSeek 块填入 `DEEPSEEK_API_KEY`（API 地址默认官方 `https://api.deepseek.com`），点"测试"验证；
 3. 点 "＋ 智谱（GLM）" / "＋ Qwen（千问）" 添加视觉模型，填入对应密钥（`GLM_API_KEY` / `SILICONFLOW_API_KEY`），各点"测试"验证；
 4. 保存 → 对话页模型选择器选择 **DeepSeek-V4-Pro 视觉**（或 Flash 视觉）；
