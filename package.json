@@ -1,65 +1,68 @@
 {
-  "name": "dsh-visionplus",
-  "version": "1.0.0",
-  "description": "DeepSeek VisionPlus — official-grade vision extension for DeepSeek Harness. Routes image understanding to a free vision-model pool (Zhipu GLM, SiliconFlow Qwen) with automatic fallback, rate limiting, one-click platform tests and live status lines; text stays on DeepSeek. One-command install. MIT.",
-  "type": "module",
-  "main": "dist/index.mjs",
-  "exports": {
-    ".": "./dist/index.mjs",
-    "./client": "./dist/client.js",
-    "./package.json": "./package.json"
-  },
-  "files": [
-    "dist",
-    "scripts",
-    "patches",
-    "cordis.patch.yml",
-    "README.md",
-    "LICENSE"
-  ],
-  "keywords": [
-    "deepseek",
-    "harness",
-    "vision",
-    "glm",
-    "qwen",
-    "plugin"
-  ],
-  "license": "MIT",
-  "scripts": {
-    "postinstall": "node scripts/enhance.mjs",
-    "preuninstall": "node scripts/uninstall.mjs"
-  },
-  "engines": {
-    "node": ">=20"
-  },
-  "dsh": {
-    "bundle": {
-      "patch": "./cordis.patch.yml"
-    },
-    "client": {
-      "platform": "web",
-      "inject": [
-        "react"
-      ],
-      "immediately": false
-    }
-  },
-  "devDependencies": {
-    "@deepseek-ai/cordis": "*",
-    "@deepseek-ai/dsh-agent": "*",
-    "@deepseek-ai/dsh-attachment": "*",
-    "@deepseek-ai/dsh-credentials": "*",
-    "@deepseek-ai/dsh-llm": "*",
-    "@deepseek-ai/dsh-llm-pi-ai": "*",
-    "@deepseek-ai/dsh-settings": "*",
-    "@deepseek-ai/dsh-system-prompt": "*",
-    "@deepseek-ai/schemastery": "*",
-    "@types/node": "*",
-    "@types/react": "*",
-    "react": "*",
-    "tsdown": "*",
-    "typescript": "*",
-    "zod": "*"
-  }
+    "name":  "dsh-visionplus",
+    "version":  "1.0.0",
+    "description":  "DeepSeek VisionPlus — official-grade vision extension for DeepSeek Harness. Routes image understanding to a free vision-model pool (Zhipu GLM, SiliconFlow Qwen) with automatic fallback, rate limiting, one-click platform tests and live status lines; text stays on DeepSeek. One-command install. MIT.",
+    "type":  "module",
+    "main":  "dist/index.mjs",
+    "exports":  {
+                    ".":  "./dist/index.mjs",
+                    "./client":  "./dist/client.js",
+                    "./package.json":  "./package.json"
+                },
+    "files":  [
+                  "dist",
+                  "scripts",
+                  "patches",
+                  "cordis.patch.yml",
+                  "README.md",
+                  "LICENSE"
+              ],
+    "keywords":  [
+                     "deepseek",
+                     "harness",
+                     "vision",
+                     "glm",
+                     "qwen",
+                     "plugin"
+                 ],
+    "license":  "MIT",
+    "scripts":  {
+                    "postinstall":  "node scripts/enhance.mjs",
+                    "preuninstall":  "node scripts/uninstall.mjs"
+                },
+    "engines":  {
+                    "node":  "\u003e=20"
+                },
+    "dsh":  {
+                "bundle":  {
+                               "patch":  "./cordis.patch.yml"
+                           },
+                "client":  {
+                               "platform":  "web",
+                               "inject":  [
+                                              "react"
+                                          ],
+                               "immediately":  false
+                           }
+            },
+    "devDependencies":  {
+                            "@deepseek-ai/cordis":  "*",
+                            "@deepseek-ai/dsh-agent":  "*",
+                            "@deepseek-ai/dsh-attachment":  "*",
+                            "@deepseek-ai/dsh-credentials":  "*",
+                            "@deepseek-ai/dsh-llm":  "*",
+                            "@deepseek-ai/dsh-llm-pi-ai":  "*",
+                            "@deepseek-ai/dsh-settings":  "*",
+                            "@deepseek-ai/dsh-system-prompt":  "*",
+                            "@deepseek-ai/schemastery":  "*",
+                            "@types/node":  "*",
+                            "@types/react":  "*",
+                            "react":  "*",
+                            "tsdown":  "*",
+                            "typescript":  "*",
+                            "zod":  "*"
+                        },
+    "dependencies":  {
+
+                     }
 }

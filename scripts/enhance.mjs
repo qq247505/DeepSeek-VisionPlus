@@ -9,12 +9,8 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createInterface } from 'node:readline'
+import { print } from './print.mjs'
 
-// Windows 控制台默认 GBK（cp936），直接输出 UTF-8 中文会乱码。
-// 先把活动代码页切到 UTF-8（chcp 65001）；非交互/重定向场景会静默失败，无副作用。
-if (process.platform === 'win32') {
-  try { spawnSync('chcp', ['65001'], { shell: true, stdio: 'ignore' }) } catch { /* 忽略 */ }
-}
 
 const here = dirname(fileURLToPath(import.meta.url))
 const patchesDir = join(here, '..', 'patches')
@@ -57,7 +53,7 @@ async function promptPath() {
     if (answer === '') continue
     const abs = resolve(answer)
     if (isHarnessRoot(abs)) { rl.close(); return abs }
-    console.log(red(`  ✗ "${answer}" 不是有效的 Harness 安装路径（需含 package.json 与 .git）。`))
+    print(red(`  ✗ "${answer}" 不是有效的 Harness 安装路径（需含 package.json 与 .git）。`))
   }
   rl.close()
   return null
@@ -65,14 +61,14 @@ async function promptPath() {
 
 const root = (await autoFind()) ?? (await promptPath())
 if (root === null) {
-  console.error(red('[dsh-visionplus] 安装失败：未找到 Harness 安装路径，无法应用增强补丁。'))
-  console.error('  解决方式二选一：')
-  console.error('    1) 设置环境变量后重新安装：  $env:DSH_HARNESS_ROOT="你的 Harness 安装路径"')
-  console.error('    2) 先把插件内 patches\\增强补丁.bat 复制到 Harness 仓库根目录双击执行，再重新安装插件。')
+  print(red('[dsh-visionplus] 安装失败：未找到 Harness 安装路径，无法应用增强补丁。'))
+  print('  解决方式二选一：')
+  print('    1) 设置环境变量后重新安装：  $env:DSH_HARNESS_ROOT="你的 Harness 安装路径"')
+  print('    2) 先把插件内 patches\\增强补丁.bat 复制到 Harness 仓库根目录双击执行，再重新安装插件。')
   process.exit(1)
 }
 
-console.log(green(`[dsh-visionplus] ✔ 已找到 Harness 安装路径：${root}`))
+print(green(`[dsh-visionplus] ✔ 已找到 Harness 安装路径：${root}`))
 const patches = readdirSync(patchesDir).filter(name => name.endsWith('.patch')).sort()
 const REQUIRED = 'models-extra-slot.patch'
 let applied = 0
@@ -83,42 +79,42 @@ for (const patch of patches) {
   if (check.status === 0) {
     const run = spawnSync('git', ['-C', root, 'apply', file], { encoding: 'utf8' })
     if (run.status === 0) {
-      console.log(green(`  ✔ 已应用补丁 ${patch}`))
+      print(green(`  ✔ 已应用补丁 ${patch}`))
       applied += 1
       if (patch === REQUIRED) requiredApplied = true
     } else if (patch === REQUIRED) {
-      console.error(red(`[dsh-visionplus] 安装失败：关键补丁 ${patch} 应用失败：${(run.stderr || '').slice(0, 300)}`))
+      print(red(`[dsh-visionplus] 安装失败：关键补丁 ${patch} 应用失败：${(run.stderr || '').slice(0, 300)}`))
       process.exit(1)
     } else {
-      console.log(warn(`  ⚠ 补丁 ${patch} 应用失败（非关键，继续）：${(run.stderr || '').slice(0, 200)}`))
+      print(warn(`  ⚠ 补丁 ${patch} 应用失败（非关键，继续）：${(run.stderr || '').slice(0, 200)}`))
     }
   } else {
     const probe = spawnSync('git', ['-C', root, 'apply', '--reverse', '--check', file], { encoding: 'utf8' })
     if (probe.status === 0) {
-      console.log(`  · 跳过 ${patch}（已应用）`)
+      print(`  · 跳过 ${patch}（已应用）`)
       if (patch === REQUIRED) requiredApplied = true
     } else if (patch === REQUIRED) {
-      console.error(red(`[dsh-visionplus] 安装失败：关键补丁 ${patch} 与当前 Harness 版本不匹配。`))
-      console.error(red(`  原因：${(check.stderr || '').slice(0, 300)}`))
+      print(red(`[dsh-visionplus] 安装失败：关键补丁 ${patch} 与当前 Harness 版本不匹配。`))
+      print(red(`  原因：${(check.stderr || '').slice(0, 300)}`))
       process.exit(1)
     } else {
-      console.log(warn(`  ⚠ 跳过 ${patch}（与当前版本不匹配，非关键）`))
+      print(warn(`  ⚠ 跳过 ${patch}（与当前版本不匹配，非关键）`))
     }
   }
 }
 if (!requiredApplied) {
-  console.error(red('[dsh-visionplus] 安装失败：模型页槽补丁 models-extra-slot.patch 未能应用。'))
+  print(red('[dsh-visionplus] 安装失败：模型页槽补丁 models-extra-slot.patch 未能应用。'))
   process.exit(1)
 }
 if (applied > 0) {
-  console.log(green('[dsh-visionplus] 正在重建宿主（首次较慢，请耐心等待）…'))
+  print(green('[dsh-visionplus] 正在重建宿主（首次较慢，请耐心等待）…'))
   const build = spawnSync('pnpm', ['run', 'build'], { cwd: root, stdio: 'inherit', shell: true })
   if (build.status !== 0) {
-    console.error(red('[dsh-visionplus] 安装失败：宿主构建未成功，请进入仓库根目录手动执行 pnpm run build。'))
+    print(red('[dsh-visionplus] 安装失败：宿主构建未成功，请进入仓库根目录手动执行 pnpm run build。'))
     process.exit(1)
   }
 } else {
-  console.log('[dsh-visionplus] 增强补丁已就绪，无需重建。')
+  print('[dsh-visionplus] 增强补丁已就绪，无需重建。')
 }
 const summary = [
   '',
@@ -134,4 +130,4 @@ const summary = [
   '  填入 DeepSeek 密钥、添加视觉模型并保存即可使用。',
   '',
 ]
-console.log(green(summary.join('\n')))
+print(green(summary.join('\n')))

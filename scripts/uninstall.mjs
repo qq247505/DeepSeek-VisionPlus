@@ -10,12 +10,8 @@ import { dirname, join, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { createInterface } from 'node:readline'
+import { print } from './print.mjs'
 
-// Windows 控制台默认 GBK（cp936），直接输出 UTF-8 中文会乱码。
-// 先把活动代码页切到 UTF-8（chcp 65001）；非交互/重定向场景会静默失败，无副作用。
-if (process.platform === 'win32') {
-  try { spawnSync('chcp', ['65001'], { shell: true, stdio: 'ignore' }) } catch { /* 忽略 */ }
-}
 
 const here = dirname(fileURLToPath(import.meta.url))
 const patchesDir = join(here, '..', 'patches')
@@ -53,7 +49,7 @@ async function promptPath() {
     if (answer === '') continue
     const abs = resolve(answer)
     if (isHarnessRoot(abs)) { rl.close(); return abs }
-    console.log(red(`  ✗ "${answer}" 不是有效的 Harness 安装路径。`))
+    print(red(`  ✗ "${answer}" 不是有效的 Harness 安装路径。`))
   }
   rl.close()
   return null
@@ -75,21 +71,21 @@ function cleanSettings() {
       out.push(line)
     }
     writeFileSync(file, out.join('\n') + '\n', 'utf8')
-    console.log(green('[dsh-visionplus] ✔ 已清理设置中的视觉模型配置'))
+    print(green('[dsh-visionplus] ✔ 已清理设置中的视觉模型配置'))
   } catch {
-    console.log(warn('[dsh-visionplus] ⚠ 设置清理跳过（可稍后手动处理）'))
+    print(warn('[dsh-visionplus] ⚠ 设置清理跳过（可稍后手动处理）'))
   }
 }
 
 const root = (await autoFind()) ?? (await promptPath())
 if (root === null) {
-  console.error(red('[dsh-visionplus] 卸载不完整：未找到 Harness 安装路径，无法回退增强补丁。'))
-  console.error('  设置环境变量 $env:DSH_HARNESS_ROOT="你的 Harness 安装路径" 后重试卸载。')
+  print(red('[dsh-visionplus] 卸载不完整：未找到 Harness 安装路径，无法回退增强补丁。'))
+  print('  设置环境变量 $env:DSH_HARNESS_ROOT="你的 Harness 安装路径" 后重试卸载。')
   cleanSettings()
   process.exit(0)
 }
 
-console.log(green(`[dsh-visionplus] ✔ 已找到 Harness 安装路径：${root}`))
+print(green(`[dsh-visionplus] ✔ 已找到 Harness 安装路径：${root}`))
 const patches = readdirSync(patchesDir).filter(name => name.endsWith('.patch')).sort().reverse()
 let reverted = 0
 for (const patch of patches) {
@@ -98,25 +94,25 @@ for (const patch of patches) {
   if (check.status === 0) {
     const run = spawnSync('git', ['-C', root, 'apply', '--reverse', file], { encoding: 'utf8' })
     if (run.status === 0) {
-      console.log(green(`  ✔ 已回退补丁 ${patch}`))
+      print(green(`  ✔ 已回退补丁 ${patch}`))
       reverted += 1
     } else {
-      console.log(warn(`  ⚠ 补丁 ${patch} 回退失败：${(run.stderr || '').slice(0, 200)}`))
+      print(warn(`  ⚠ 补丁 ${patch} 回退失败：${(run.stderr || '').slice(0, 200)}`))
     }
   } else {
-    console.log(`  · 跳过 ${patch}（未应用）`)
+    print(`  · 跳过 ${patch}（未应用）`)
   }
 }
 if (reverted > 0) {
-  console.log(green('[dsh-visionplus] 正在重建宿主恢复原状（首次较慢，请耐心等待）…'))
+  print(green('[dsh-visionplus] 正在重建宿主恢复原状（首次较慢，请耐心等待）…'))
   const build = spawnSync('pnpm', ['run', 'build'], { cwd: root, stdio: 'inherit', shell: true })
   if (build.status !== 0) {
-    console.log(warn('[dsh-visionplus] ⚠ 重建未成功，请进入仓库根目录手动执行 pnpm run build。'))
+    print(warn('[dsh-visionplus] ⚠ 重建未成功，请进入仓库根目录手动执行 pnpm run build。'))
   } else {
-    console.log(green('[dsh-visionplus] ✔ 宿主已恢复官方原状。'))
+    print(green('[dsh-visionplus] ✔ 宿主已恢复官方原状。'))
   }
 } else {
-  console.log('[dsh-visionplus] 无需回退补丁。')
+  print('[dsh-visionplus] 无需回退补丁。')
 }
 cleanSettings()
 const summary = [
@@ -128,4 +124,4 @@ const summary = [
   '  已回退全部增强补丁，宿主已恢复官方原状。',
   '',
 ]
-console.log(green(summary.join('\n')))
+print(green(summary.join('\n')))
