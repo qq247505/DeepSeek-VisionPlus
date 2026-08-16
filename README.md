@@ -30,7 +30,7 @@ DeepSeek 官方模型是纯文本模型，本身不能看图。DeepSeek VisionPl
 
 ## 📥 安装
 
-要求：已安装官方 DeepSeek Harness（桌面端或源码运行均可）+ pnpm。
+要求：已安装官方 DeepSeek Harness（桌面端或命令行运行均可）+ pnpm。
 
 ```bash
 dsh plugin --profile web add github:qq247505/DeepSeek-VisionPlus
@@ -43,10 +43,10 @@ dsh plugin --profile web add github:qq247505/DeepSeek-VisionPlus
 与 Harness 官方自身的"自定位"方式一致，按三层依次查找：
 
 1. 环境变量 `DSH_HARNESS_ROOT`（手动指定，最高优先级）；
-2. 从安装目录向上逐级查找（`package.json` 名称 + `packages/host/apiproxy` 源码标记校验）；
+2. 从安装目录向上逐级查找（`package.json` 名称 + `packages/host/apiproxy` 目录标记校验）；
 3. 常见克隆路径 `D:\DeepSeek Harness` / `C:\DeepSeek Harness`（Windows 兜底）。
 
-> **限制**：通过 `npx @deepseek-ai/dsh web` 运行的纯 npm 用户没有本地源码，增强补丁无处应用，安装会失败并提示原因。需等待官方开放"插件注册 RPC / 槽位"的正式机制后，本插件才能覆盖纯 npm 安装方式。
+> **限制**：通过 `npx @deepseek-ai/dsh web` 运行的纯 npm 用户没有本地安装目录，增强补丁无处应用，安装会失败并提示原因。需等待官方开放"插件注册 RPC / 槽位"的正式机制后，本插件才能覆盖纯 npm 安装方式。
 
 ## 🚀 快速开始
 
@@ -68,7 +68,7 @@ dsh plugin --profile web add github:qq247505/DeepSeek-VisionPlus
 
 ## 🧩 增强补丁
 
-核心功能不需要补丁；安装时自动应用以下增强补丁（需能定位 Harness 源码目录）：
+核心功能不需要补丁；安装时自动应用以下增强补丁（需能定位 Harness 安装位置）：
 
 | 补丁 | 增强内容 |
 |---|---|

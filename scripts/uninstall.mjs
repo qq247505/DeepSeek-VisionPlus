@@ -39,7 +39,7 @@ async function promptPath() {
   if (!(process.stdin.isTTY && process.stdout.isTTY)) return null
   const rl = createInterface({ input: process.stdin, output: process.stdout })
   const ask = () => new Promise(r => rl.question(
-    `  ${warn('未找到 Harness 安装路径。请输入 DeepSeek Harness 源码根目录路径后回车：')} `,
+    `  ${warn('未找到 Harness 安装路径。请输入 Harness 安装路径后回车：')} `,
     r,
   ))
   for (let i = 0; i < 3; i += 1) {

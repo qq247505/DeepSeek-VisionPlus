@@ -16,7 +16,7 @@ const green = (s) => `\u001b[32m${s}\u001b[0m`
 const warn = (s) => `\u001b[33m${s}\u001b[0m`
 const red = (s) => `\u001b[31m${s}\u001b[0m`
 
-/** 校验一个目录是否是 Harness 源码根 */
+/** 校验一个目录是否是 Harness 安装位置 */
 function isHarnessRoot(dir) {
   try {
     const pj = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))
