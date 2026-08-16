@@ -40,6 +40,8 @@ function buildProfiles(settings: VisionPlusSettings): Record<string, PiAiProvide
       id: m.id,
       name: m.name ?? m.id,
       input: ['text'] as const,
+      // DeepSeek 官方推理档位：off/high/max —— 声明后会话可选 max 等档位
+      reasoningEfforts: { off: 'off', low: 'high', medium: 'high', high: 'high', xhigh: 'max', max: 'max' } as Record<string, string>,
       ...(m.contextWindow === undefined ? {} : { contextWindow: m.contextWindow }),
       ...(m.maxTokens === undefined ? {} : { maxTokens: m.maxTokens }),
     })),

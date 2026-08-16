@@ -30535,6 +30535,14 @@ function buildProfiles(settings) {
 			id: m.id,
 			name: m.name ?? m.id,
 			input: ["text"],
+			reasoningEfforts: {
+				off: "off",
+				low: "high",
+				medium: "high",
+				high: "high",
+				xhigh: "max",
+				max: "max"
+			},
 			...m.contextWindow === void 0 ? {} : { contextWindow: m.contextWindow },
 			...m.maxTokens === void 0 ? {} : { maxTokens: m.maxTokens }
 		}))
