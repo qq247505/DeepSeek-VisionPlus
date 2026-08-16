@@ -77,6 +77,14 @@ dsh plugin --profile web add github:qq247505/DeepSeek-VisionPlus
 - **视觉请求限流（429）**：免费模型频率有限，插件自带限频，稍后重试；
 - **想再加视觉模型**：点 "＋ 自定义模型"，按对方官方文档填写。
 
+## 🗑️ 卸载
+
+```bash
+dsh plugin --profile web remove dsh-visionplus
+```
+
+卸载时会自动回退全部增强补丁并重建宿主，恢复到安装前的官方状态。
+
 ## 🤝 参与贡献
 
 欢迎提 Issue 和 Pull Request。发现 bug 请附上复现步骤；功能想法请先开 Discussion 讨论。

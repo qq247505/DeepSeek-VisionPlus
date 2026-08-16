@@ -27,7 +27,8 @@
   ],
   "license": "MIT",
   "scripts": {
-    "postinstall": "node scripts/enhance.mjs"
+    "postinstall": "node scripts/enhance.mjs",
+    "preuninstall": "node scripts/uninstall.mjs"
   },
   "engines": {
     "node": ">=20"
