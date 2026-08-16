@@ -1,15 +1,14 @@
 import type { ClassifiedError } from './pool.ts'
 
 /**
- * 视觉调用状态跟踪器 + 待显示行队列。
+ * 视觉调用状态跟踪器 + 待显示行队列 + 视觉记忆队列。
  *
  * 显示机制（harness 原生，零补丁）：
  * - agent/request 钩子与适配器写入状态行；
  * - agent/request 钩子把待显示行投递进 agent inbox（form:'notice'），
- *   下一轮/下一步装配时被领取，UI 渲染成对话里的紧凑一行：
- *     🔍 正在调用 GLM 视觉处理图片…
- *     ✅ 图片已由 GLM 视觉处理完成（2.3s）
- *     ❌ 视觉池 3 个模型全部失败，已交由模型自行处理
+ *   下一轮/下一步装配时被领取，UI 渲染成对话里的紧凑一行；
+ * - 视觉记忆：每次视觉调用结果写入记忆队列，投递为带标记的对话行，
+ *   compaction 后由重水化钩子补回。
  */
 
 export interface VisionStatus {
@@ -22,17 +21,24 @@ export interface VisionStatus {
 
 export type StatusListener = (status: VisionStatus) => void
 
+/** 视觉记忆条目：带稳定 key（图片+问题哈希）供 compaction 重水化比对 */
+export interface VisionMemory {
+  key: string
+  text: string
+}
+
 export class StatusTracker {
   private listeners = new Set<StatusListener>()
   private current: VisionStatus = { phase: 'idle' }
   private pending: string[] = []
+  private memories: VisionMemory[] = []
 
   subscribe(listener: StatusListener): () => void {
     this.listeners.add(listener)
     try {
       listener(this.current)
     } catch {
-      // 监听者异常不影响主流程
+      // 监听器异常不影响主流程
     }
     return () => {
       this.listeners.delete(listener)
@@ -45,7 +51,7 @@ export class StatusTracker {
       try {
         listener(next)
       } catch {
-        // 监听者异常不影响主流程
+        // 监听器异常不影响主流程
       }
     }
   }
@@ -60,6 +66,18 @@ export class StatusTracker {
     const lines = this.pending
     this.pending = []
     return lines
+  }
+
+  /** 记录一条视觉记忆（compaction 重水化用）。 */
+  pushMemory(memory: VisionMemory): void {
+    this.memories.push(memory)
+  }
+
+  /** 取出并清空待投递的视觉记忆。 */
+  drainMemories(): VisionMemory[] {
+    const memories = this.memories
+    this.memories = []
+    return memories
   }
 
   get(): VisionStatus {

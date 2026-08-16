@@ -237,6 +237,55 @@ export function apply(ctx: Context, config: unknown): void {
     })
   }
 
+  // 1.4) 视觉记忆 compaction 重水化：压缩摘要遮蔽近期视觉记忆后自动补回
+  const MEMORY_MARKER = '【视觉记忆·'
+  try {
+    const beforeCompaction = new WeakMap<object, string[]>()
+    const memoryLinesOf = (session: { deriveMessages?: () => Array<{ content?: unknown }> }): string[] => {
+      const lines: string[] = []
+      for (const message of session.deriveMessages?.() ?? []) {
+        const blocks = message.content
+        if (!Array.isArray(blocks)) continue
+        for (const block of blocks) {
+          const text = (block as { type?: string, text?: string }).text
+          if (typeof text === 'string' && text.includes(MEMORY_MARKER)) lines.push(text)
+        }
+      }
+      return lines
+    }
+    ctx.on('session/event', (session, event) => {
+      const anyEvent = event as { type?: string, data?: { error?: unknown } }
+      const anySession = session as { deriveMessages?: () => Array<{ content?: unknown }>, append?: (type: string, message: unknown) => void }
+      if (anyEvent.type === 'compaction/summary') {
+        beforeCompaction.set(session as object, memoryLinesOf(anySession))
+        return
+      }
+      if (anyEvent.type !== 'compaction/end') return
+      const before = beforeCompaction.get(session as object) ?? []
+      beforeCompaction.delete(session as object)
+      if (anyEvent.data?.error !== undefined || before.length === 0 || anySession.append === undefined) return
+      queueMicrotask(() => {
+        try {
+          const visible = new Set(memoryLinesOf(anySession))
+          const missing = before.filter(line => !visible.has(line)).slice(-4)
+          const appendFn = anySession.append
+          if (appendFn === undefined || missing.length === 0) return
+          for (const line of missing) {
+            appendFn('user/message', createUserMessage({
+              content: [{ type: 'text', text: line }],
+              source: { kind: 'plugin', plugin: 'vision-plus', form: 'notice', summary: line.slice(0, 80) },
+            }))
+          }
+          if (missing.length > 0) ctx.logger.info(`vision-plus: compaction 后补回 ${missing.length} 条视觉记忆`)
+        } catch {
+          // 补回失败不影响主流程
+        }
+      })
+    })
+  } catch (error) {
+    ctx.logger.warn(`vision-plus: 视觉记忆重水化安装失败: ${String(error)}`)
+  }
+
   // 1.5) 会话级切换（零补丁）：运行时接管 agentDefaultModel.saveSelection。
   //      该方法的唯一调用方是 session.selectModel（已核实），吞掉 = "切换只影响当前会话"。
   try {
@@ -281,7 +330,9 @@ export function apply(ctx: Context, config: unknown): void {
   }
   const pool = new VisionPool(poolOf, cfg.rateLimit)
   const status = new StatusTracker()
-  const adapter = new VisionRouterAdapter(cfg, inner, pool, status)
+  const adapter = new VisionRouterAdapter(cfg, inner, pool, status, (payload) => {
+    status.pushMemory({ key: payload.key, text: payload.text.slice(0, 300) })
+  })
   ctx.llm.registerAdapter([cfg.providerId], adapter)
 
   // 4) 状态行投递：把视觉调用的结果行/进行中行注入对话。
@@ -301,6 +352,15 @@ export function apply(ctx: Context, config: unknown): void {
       if (lines.length > 0) push(lines.join('\n'), lines[0] ?? 'vision-plus')
     } catch {
       // 状态行只是增强显示，失败不影响主流程
+    }
+    try {
+      const memories = status.drainMemories()
+      for (const memory of memories) {
+        const memoryText = `【视觉记忆·${memory.key.slice(0, 12)}】${memory.text}`
+        push(memoryText, `视觉记忆：${memory.text.slice(0, 60)}`)
+      }
+    } catch {
+      // 记忆投递失败不影响主流程
     }
     try {
       if (hasPendingImage(agent as never)) {

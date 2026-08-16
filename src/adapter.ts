@@ -1,4 +1,5 @@
 import { contentHasImage, LlmAdapter, LlmError, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import { createHash } from 'node:crypto'
 import type { GenerateOptions, LlmModelInfo, LlmResolvedModelInfo, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { PiAiAdapter } from '@deepseek-ai/dsh-llm-pi-ai'
 import type { VisionPlusConfig, Variant } from './config.js'
@@ -22,13 +23,63 @@ import type { VisionPool } from './pool.js'
  * 请求路径，行为等价。
  */
 export class VisionRouterAdapter extends LlmAdapter {
+  /** 内容哈希缓存：同图+同问题+同模型 直接复用结果（LRU，上限 64） */
+  private readonly cache = new Map<string, { text: string }>()
+
   constructor(
     private readonly config: VisionPlusConfig,
     private readonly inner: PiAiAdapter,
     private readonly pool: VisionPool,
     readonly status: StatusTracker,
+    private readonly onVisionResult?: (payload: { key: string, text: string, model: string }) => void,
   ) {
     super()
+  }
+
+  /** 图片块指纹：同一批图（内容相同）产生同一指纹 */
+  private static imageFingerprint(messages: GenerateOptions['messages']): string {
+    const images: unknown[] = []
+    const collect = (value: unknown): void => {
+      if (Array.isArray(value)) { for (const item of value) collect(item); return }
+      if (value === null || typeof value !== 'object') return
+      const record = value as Record<string, unknown>
+      if (record.type === 'image') {
+        images.push({
+          ...('attachmentId' in record ? { attachmentId: record.attachmentId } : {}),
+          ...('data' in record ? { data: record.data } : {}),
+          ...('url' in record ? { url: record.url } : {}),
+        })
+        return
+      }
+      for (const v of Object.values(record)) collect(v)
+    }
+    collect(messages)
+    return JSON.stringify(images)
+  }
+
+  /** 最近一条用户文本（缓存键的一部分） */
+  private static lastUserText(messages: GenerateOptions['messages']): string {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const message = messages[i]
+      if (message?.role !== 'user') continue
+      const text = message.content
+        .filter((block): block is { type: 'text', text: string } => block.type === 'text')
+        .map(block => block.text)
+        .join('')
+      if (text.length > 0) return text
+    }
+    return ''
+  }
+
+  private cacheKeyOf(messages: GenerateOptions['messages'], model: string, provider: string): string {
+    return createHash('sha256')
+      .update(JSON.stringify({
+        images: VisionRouterAdapter.imageFingerprint(messages),
+        prompt: VisionRouterAdapter.lastUserText(messages),
+        model,
+        provider,
+      }))
+      .digest('hex')
   }
 
   override providerInfo(provider: string): { id: string, name: string } {
@@ -102,15 +153,38 @@ export class VisionRouterAdapter extends LlmAdapter {
     let last: unknown
 
     for (const entry of this.pool.ordered()) {
+      const cacheKey = this.cacheKeyOf(visionOptions.messages, entry.model, entry.provider)
+      const cached = this.cache.get(cacheKey)
+      if (cached !== undefined) {
+        // 命中缓存：直接合成回复（同图+同问题+同模型 不重复调用视觉接口）
+        yield { type: 'text-delta', index: 0, text: cached.text }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+        this.status.set({ phase: 'success', label: entry.label, elapsedMs: 0, tried })
+        this.status.report(`vision-plus：⚡ 命中缓存，图片结果直接复用（${entry.label}）`)
+        return
+      }
       const startedAt = Date.now()
       try {
         await this.pool.acquire(entry)
         this.status.set({ phase: 'calling', label: entry.label, tried })
-        yield * this.sanitize(this.inner.stream({
+        let collected = ''
+        for await (const chunk of this.sanitize(this.inner.stream({
           ...visionOptions,
           provider: entry.provider,
           model: entry.model,
-        }))
+        }))) {
+          if (chunk.type === 'text-delta') collected += chunk.text
+          yield chunk
+        }
+        collected = collected.trim()
+        if (collected.length > 0) {
+          if (this.cache.size >= 64) {
+            const oldest = this.cache.keys().next().value
+            if (oldest !== undefined) this.cache.delete(oldest)
+          }
+          this.cache.set(cacheKey, { text: collected })
+          this.onVisionResult?.({ key: cacheKey, text: collected, model: entry.model })
+        }
         this.pool.recordSuccess(entry)
         const elapsedMs = Date.now() - startedAt
         this.status.set({ phase: 'success', label: entry.label, elapsedMs, tried })

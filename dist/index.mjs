@@ -1,6 +1,7 @@
 import { a as getSupportedThinkingLevels, i as createProvider, o as lazyApi, r as createModels } from "./models-QwhDz2qm.mjs";
 import { a as array, g as string, m as object, p as number } from "./schemas-DXny_Pxn.mjs";
 import { createRequire } from "node:module";
+import { createHash } from "node:crypto";
 //#region ../../vendor/cosmokit/lib/index.js
 /** Return true when a value is `null` or `undefined`. */
 function isNullable(value) {
@@ -30073,17 +30074,62 @@ const Config = object({
 * 与对外路由不一致会让 harness 重放校验报错）。剥掉后 harness 走普通
 * 请求路径，行为等价。
 */
-var VisionRouterAdapter = class extends LlmAdapter {
+var VisionRouterAdapter = class VisionRouterAdapter extends LlmAdapter {
 	config;
 	inner;
 	pool;
 	status;
-	constructor(config, inner, pool, status) {
+	onVisionResult;
+	/** 内容哈希缓存：同图+同问题+同模型 直接复用结果（LRU，上限 64） */
+	cache = /* @__PURE__ */ new Map();
+	constructor(config, inner, pool, status, onVisionResult) {
 		super();
 		this.config = config;
 		this.inner = inner;
 		this.pool = pool;
 		this.status = status;
+		this.onVisionResult = onVisionResult;
+	}
+	/** 图片块指纹：同一批图（内容相同）产生同一指纹 */
+	static imageFingerprint(messages) {
+		const images = [];
+		const collect = (value) => {
+			if (Array.isArray(value)) {
+				for (const item of value) collect(item);
+				return;
+			}
+			if (value === null || typeof value !== "object") return;
+			const record = value;
+			if (record.type === "image") {
+				images.push({
+					..."attachmentId" in record ? { attachmentId: record.attachmentId } : {},
+					..."data" in record ? { data: record.data } : {},
+					..."url" in record ? { url: record.url } : {}
+				});
+				return;
+			}
+			for (const v of Object.values(record)) collect(v);
+		};
+		collect(messages);
+		return JSON.stringify(images);
+	}
+	/** 最近一条用户文本（缓存键的一部分） */
+	static lastUserText(messages) {
+		for (let i = messages.length - 1; i >= 0; i -= 1) {
+			const message = messages[i];
+			if (message?.role !== "user") continue;
+			const text = message.content.filter((block) => block.type === "text").map((block) => block.text).join("");
+			if (text.length > 0) return text;
+		}
+		return "";
+	}
+	cacheKeyOf(messages, model, provider) {
+		return createHash("sha256").update(JSON.stringify({
+			images: VisionRouterAdapter.imageFingerprint(messages),
+			prompt: VisionRouterAdapter.lastUserText(messages),
+			model,
+			provider
+		})).digest("hex");
 	}
 	providerInfo(provider) {
 		return {
@@ -30149,6 +30195,27 @@ var VisionRouterAdapter = class extends LlmAdapter {
 		const failures = [];
 		let last;
 		for (const entry of this.pool.ordered()) {
+			const cacheKey = this.cacheKeyOf(visionOptions.messages, entry.model, entry.provider);
+			const cached = this.cache.get(cacheKey);
+			if (cached !== void 0) {
+				yield {
+					type: "text-delta",
+					index: 0,
+					text: cached.text
+				};
+				yield {
+					type: "finish",
+					reason: { kind: "stop" }
+				};
+				this.status.set({
+					phase: "success",
+					label: entry.label,
+					elapsedMs: 0,
+					tried
+				});
+				this.status.report(`vision-plus：⚡ 命中缓存，图片结果直接复用（${entry.label}）`);
+				return;
+			}
 			const startedAt = Date.now();
 			try {
 				await this.pool.acquire(entry);
@@ -30157,11 +30224,28 @@ var VisionRouterAdapter = class extends LlmAdapter {
 					label: entry.label,
 					tried
 				});
-				yield* this.sanitize(this.inner.stream({
+				let collected = "";
+				for await (const chunk of this.sanitize(this.inner.stream({
 					...visionOptions,
 					provider: entry.provider,
 					model: entry.model
-				}));
+				}))) {
+					if (chunk.type === "text-delta") collected += chunk.text;
+					yield chunk;
+				}
+				collected = collected.trim();
+				if (collected.length > 0) {
+					if (this.cache.size >= 64) {
+						const oldest = this.cache.keys().next().value;
+						if (oldest !== void 0) this.cache.delete(oldest);
+					}
+					this.cache.set(cacheKey, { text: collected });
+					this.onVisionResult?.({
+						key: cacheKey,
+						text: collected,
+						model: entry.model
+					});
+				}
 				this.pool.recordSuccess(entry);
 				const elapsedMs = Date.now() - startedAt;
 				this.status.set({
@@ -30311,6 +30395,7 @@ var StatusTracker = class {
 	listeners = /* @__PURE__ */ new Set();
 	current = { phase: "idle" };
 	pending = [];
+	memories = [];
 	subscribe(listener) {
 		this.listeners.add(listener);
 		try {
@@ -30335,6 +30420,16 @@ var StatusTracker = class {
 		const lines = this.pending;
 		this.pending = [];
 		return lines;
+	}
+	/** 记录一条视觉记忆（compaction 重水化用）。 */
+	pushMemory(memory) {
+		this.memories.push(memory);
+	}
+	/** 取出并清空待投递的视觉记忆。 */
+	drainMemories() {
+		const memories = this.memories;
+		this.memories = [];
+		return memories;
 	}
 	get() {
 		return this.current;
@@ -30683,6 +30778,57 @@ function apply(ctx, config) {
 			}
 		}
 	});
+	const MEMORY_MARKER = "【视觉记忆·";
+	try {
+		const beforeCompaction = /* @__PURE__ */ new WeakMap();
+		const memoryLinesOf = (session) => {
+			const lines = [];
+			for (const message of session.deriveMessages?.() ?? []) {
+				const blocks = message.content;
+				if (!Array.isArray(blocks)) continue;
+				for (const block of blocks) {
+					const text = block.text;
+					if (typeof text === "string" && text.includes(MEMORY_MARKER)) lines.push(text);
+				}
+			}
+			return lines;
+		};
+		ctx.on("session/event", (session, event) => {
+			const anyEvent = event;
+			const anySession = session;
+			if (anyEvent.type === "compaction/summary") {
+				beforeCompaction.set(session, memoryLinesOf(anySession));
+				return;
+			}
+			if (anyEvent.type !== "compaction/end") return;
+			const before = beforeCompaction.get(session) ?? [];
+			beforeCompaction.delete(session);
+			if (anyEvent.data?.error !== void 0 || before.length === 0 || anySession.append === void 0) return;
+			queueMicrotask(() => {
+				try {
+					const visible = new Set(memoryLinesOf(anySession));
+					const missing = before.filter((line) => !visible.has(line)).slice(-4);
+					const appendFn = anySession.append;
+					if (appendFn === void 0 || missing.length === 0) return;
+					for (const line of missing) appendFn("user/message", createUserMessage({
+						content: [{
+							type: "text",
+							text: line
+						}],
+						source: {
+							kind: "plugin",
+							plugin: "vision-plus",
+							form: "notice",
+							summary: line.slice(0, 80)
+						}
+					}));
+					if (missing.length > 0) ctx.logger.info(`vision-plus: compaction 后补回 ${missing.length} 条视觉记忆`);
+				} catch {}
+			});
+		});
+	} catch (error) {
+		ctx.logger.warn(`vision-plus: 视觉记忆重水化安装失败: ${String(error)}`);
+	}
 	try {
 		const defaultModelService = ctx.get("agentDefaultModel");
 		if (defaultModelService !== void 0 && typeof defaultModelService.saveSelection === "function") defaultModelService.saveSelection = async () => {};
@@ -30721,7 +30867,12 @@ function apply(ctx, config) {
 	};
 	const pool = new VisionPool(poolOf, cfg.rateLimit);
 	const status = new StatusTracker();
-	const adapter = new VisionRouterAdapter(cfg, inner, pool, status);
+	const adapter = new VisionRouterAdapter(cfg, inner, pool, status, (payload) => {
+		status.pushMemory({
+			key: payload.key,
+			text: payload.text.slice(0, 300)
+		});
+	});
 	ctx.llm.registerAdapter([cfg.providerId], adapter);
 	ctx.on("agent/request", async (payload, next) => {
 		const base = await next();
@@ -30743,6 +30894,10 @@ function apply(ctx, config) {
 		try {
 			const lines = status.drainAll();
 			if (lines.length > 0) push(lines.join("\n"), lines[0] ?? "vision-plus");
+		} catch {}
+		try {
+			const memories = status.drainMemories();
+			for (const memory of memories) push(`【视觉记忆·${memory.key.slice(0, 12)}】${memory.text}`, `视觉记忆：${memory.text.slice(0, 60)}`);
 		} catch {}
 		try {
 			if (hasPendingImage(agent)) {
